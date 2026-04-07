@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "descricao": "Backup da aba «Lista de inscritos» (inscrições confirmadas na lista oficial). Substitua o conteúdo ao exportar do Google Apps Script.",
+    "geradoEm": null,
+    "fonte": "Google Sheets",
+    "planilhaId": "",
+    "aba": "Lista de inscritos",
+    "totalInscricoes": 0,
+    "comoAtualizar": "No Apps Script: defina BACKUP_JSON_KEY nas Propriedades; abra a URL da Web App com ?backup=1&key=SUA_CHAVE e salve o JSON aqui. Ou execute exportarBackupJsonParaDrive() e copie do arquivo no Drive."
+  },
+  "inscricoes": []
+}

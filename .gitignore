@@ -1,3 +1,6 @@
 .DS_Store
 Thumbs.db
 *.log
+
+# Cópia local com dados reais (opcional — não sobrescreve o modelo do repositório)
+data/inscritos-confirmados.local.json

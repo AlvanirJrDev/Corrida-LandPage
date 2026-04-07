@@ -12,7 +12,7 @@
  * Planilha (Drive): só compartilhe com quem for organizador. "Pode editar" = pode ver todos os
  * inscritos e apagar linhas. Evite link público com permissão de edição.
  *
- * Pagamento online: webhookUrl = URL da Web App (/exec). O google-apps-script.gs tem WEB_APP_URL_FALLBACK igual a ela;
+ * Pagamento online + consulta de inscrição: webhookUrl = URL da Web App (/exec). O google-apps-script.gs tem WEB_APP_URL_FALLBACK igual a ela;
  * opcionalmente defina WEB_APP_URL nas Propriedades do script para sobrescrever.
  */
 window.CORRIDA_CONFIG = {
@@ -31,7 +31,7 @@ window.CORRIDA_CONFIG = {
   /** Usado só se a lista lotes estiver vazia (fallback). */
   valorInscricao: "R$ 45,00",
   pixChave: "(informe a chave PIX ou orientação de pagamento)",
-  nomeEvento: "2ª Corrida Sagrado Coração de Jesus",
+  nomeEvento: "Corrida Mariana em prol do ECC e EJC de Sanharó",
 
   /**
    * Mercado Pago (Checkout Pro — redireciona para página segura de pagamento).

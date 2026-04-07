@@ -9,6 +9,12 @@
  *   MERCADO_PAGO_ACCESS_TOKEN = Access Token (mercadopago.com.br/developers)
  *   WEB_APP_URL (opcional) = mesma URL do webhookUrl em config.js. Se não definir, usa WEB_APP_URL_FALLBACK no código abaixo.
  *
+ * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca por e-mail + telefone (só dígitos) na lista oficial e em Inscrições pendentes MP.
+ *
+ * Backup JSON (lista oficial): defina BACKUP_JSON_KEY nas Propriedades do script. GET:
+ *   URL_DA_WEB_APP/exec?backup=1&key=SUA_CHAVE
+ * Copie o JSON e salve em data/inscritos-confirmados.json no projeto. Ou execute exportarBackupJsonParaDrive() no editor (cria arquivo no Google Drive).
+ *
  * Compartilhamento da planilha (Google Drive): quem tiver permissão de EDITOR pode ver, alterar e apagar
  * todas as linhas. Não use "Qualquer pessoa com o link pode editar" para o público. Restrinja a
  * organizadores (e-mail) ou use "Somente visualização" para quem só precisa consultar.
@@ -18,7 +24,7 @@
 var ID_PLANILHA = "1BLVaZLh3Dq64WvUoQ2_XhPXgDAB-uOkW0t-Gek9gaKc";
 
 /** Alinhe com config.js → nomeEvento (texto do e-mail de confirmação). */
-var NOME_EVENTO_EMAIL = "2ª Corrida Sagrado Coração de Jesus";
+var NOME_EVENTO_EMAIL = "Corrida Mariana em prol do ECC e EJC de Sanharó";
 
 /** Mesma URL que config.js → webhookUrl (termina em /exec). Alinhe os dois se mudar a implantação. */
 var WEB_APP_URL_FALLBACK =
@@ -54,8 +60,34 @@ var CABECALHOS = [
   "Status pagamento",
 ];
 
+/** Chaves do objeto em cada linha do backup JSON (mesma ordem que CABECALHOS). */
+var CHAVES_JSON_INSCRICAO = [
+  "data",
+  "protocolo",
+  "nome",
+  "email",
+  "telefone",
+  "cidade",
+  "camisa",
+  "percurso",
+  "loteId",
+  "lote",
+  "valorReais",
+  "formaPagamento",
+  "statusPagamento",
+];
+
 function soDigitos(s) {
   return String(s || "").replace(/\D/g, "");
+}
+
+/** Compara telefones BR salvos com ou sem DDI 55 (últimos 11 dígitos). */
+function telefonesIguaisBR(a, b) {
+  var da = soDigitos(a);
+  var db = soDigitos(b);
+  if (da === db) return true;
+  if (da.length < 10 || db.length < 10) return false;
+  return da.slice(-11) === db.slice(-11);
 }
 
 function jaTemCadastro(sheet, email, telDigits) {
@@ -174,6 +206,175 @@ function encontrarLinhaPorProtocolo(sheet, protocolo) {
     }
   }
   return -1;
+}
+
+/** Índice coluna "Status pagamento" (0-based), alinhado a CABECALHOS */
+var COL_IX_STATUS = 12;
+
+/**
+ * Busca inscrição na lista principal ou em pendentes MP — exige e-mail + telefone (mesmos da inscrição; telefone comparado só com dígitos).
+ */
+function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
+  var em = String(email || "")
+    .trim()
+    .toLowerCase();
+  var td = soDigitos(telefoneDigitos);
+  if (!em || td.length < 10) return null;
+
+  var alvo = [obterAbaInscricoes(ss), obterAbaPendentes(ss)];
+  var nomes = ["lista_oficial", "pendente_mp"];
+  for (var s = 0; s < alvo.length; s++) {
+    var sheet = alvo[s];
+    if (!sheet || sheet.getLastRow() === 0) continue;
+    garantirCabecalhosPlanilha(sheet);
+    var values = sheet.getDataRange().getValues();
+    var start = 0;
+    if (values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo") {
+      start = 1;
+    }
+    for (var i = start; i < values.length; i++) {
+      var row = values[i];
+      if (String(row[COL_IX_EMAIL]).trim().toLowerCase() !== em) continue;
+      if (!telefonesIguaisBR(row[COL_IX_TELEFONE], td)) continue;
+      return { row: row, origem: nomes[s] };
+    }
+  }
+  return null;
+}
+
+function linhaParaRespostaConsulta(row, origem) {
+  var valor = row[10];
+  if (valor !== "" && valor !== null && valor !== undefined) {
+    if (typeof valor === "number") {
+      valor =
+        "R$ " +
+        valor.toFixed(2).replace(".", ",");
+    } else {
+      valor = String(valor);
+      if (valor !== "" && valor.indexOf("R$") !== 0) {
+        valor = "R$ " + valor;
+      }
+    }
+  } else {
+    valor = "";
+  }
+  var situacaoLista =
+    origem === "lista_oficial"
+      ? "Inscrição na lista oficial do evento"
+      : "Inscrição aguardando confirmação do pagamento online (Mercado Pago)";
+  return {
+    protocolo: String(row[COL_IX_PROTOCOLO] || "").trim(),
+    nome: String(row[COL_IX_NOME] || "").trim(),
+    cidade: String(row[5] || "").trim(),
+    camisa: String(row[6] || "").trim(),
+    percurso: String(row[7] || "").trim(),
+    loteNome: String(row[9] || "").trim(),
+    valorReais: valor,
+    formaPagamento: String(row[11] || "").trim(),
+    statusPagamento: String(row[COL_IX_STATUS] || "").trim(),
+    situacaoLista: situacaoLista,
+  };
+}
+
+function celulaParaJsonBackup(v) {
+  if (v === null || typeof v === "undefined") return "";
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    try {
+      return Utilities.formatDate(v, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
+    } catch (e1) {
+      return String(v);
+    }
+  }
+  if (typeof v === "number") return v;
+  return String(v);
+}
+
+function linhaParaObjetoBackup(row) {
+  var o = {};
+  for (var c = 0; c < CHAVES_JSON_INSCRICAO.length && c < row.length; c++) {
+    var key = CHAVES_JSON_INSCRICAO[c];
+    var val = row[c];
+    if (key === "valorReais" && typeof val === "number") {
+      o[key] = val;
+    } else if (key === "valorReais" && val !== "" && val !== null && typeof val !== "undefined") {
+      var n = parseFloat(String(val).replace(",", "."));
+      o[key] = isNaN(n) ? celulaParaJsonBackup(val) : n;
+    } else {
+      o[key] = celulaParaJsonBackup(val);
+    }
+  }
+  return o;
+}
+
+/**
+ * Snapshot da aba Lista de inscritos (cabeçalho ignorado). Uso: backup local em JSON.
+ */
+function gerarPayloadBackupListaInscritos() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var sheet = obterAbaInscricoes(ss);
+  if (!sheet) throw new Error("Aba Lista de inscritos não encontrada.");
+  garantirCabecalhosPlanilha(sheet);
+  var values = sheet.getDataRange().getValues();
+  var start = 0;
+  if (values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo") {
+    start = 1;
+  }
+  var lista = [];
+  for (var i = start; i < values.length; i++) {
+    lista.push(linhaParaObjetoBackup(values[i]));
+  }
+  return {
+    meta: {
+      descricao: "Backup da aba Lista de inscritos (inscrições na lista oficial do evento).",
+      geradoEm: new Date().toISOString(),
+      fonte: "Google Sheets",
+      planilhaId: ID_PLANILHA,
+      aba: sheet.getName(),
+      totalInscricoes: lista.length,
+    },
+    inscricoes: lista,
+  };
+}
+
+/**
+ * Executar no editor (▶ Executar): cria um arquivo .json no Google Drive com o backup.
+ * Abra o arquivo → copie o conteúdo para data/inscritos-confirmados.json no repositório, se quiser.
+ */
+function exportarBackupJsonParaDrive() {
+  var payload = gerarPayloadBackupListaInscritos();
+  var json = JSON.stringify(payload, null, 2);
+  var nome =
+    "inscritos-confirmados-" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd-HHmm") + ".json";
+  var file = DriveApp.createFile(nome, json, MimeType.PLAIN_TEXT);
+  Logger.log("Criado: " + file.getName() + " — " + file.getUrl());
+  return file.getUrl();
+}
+
+function executarConsultaInscricao(data) {
+  var email = data.email;
+  var tel = data.telefone != null ? data.telefone : data.telefoneDigitos;
+  tel = tel != null ? String(tel) : "";
+  if (!String(email || "").trim() || !String(tel || "").trim()) {
+    return { ok: false, error: "Informe o e-mail e o telefone (WhatsApp) usados na inscrição." };
+  }
+  if (soDigitos(tel).length < 10) {
+    return { ok: false, error: "Telefone inválido: use DDD + número (ex.: (87) 99999-9999)." };
+  }
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var achado = buscarInscricaoPorEmailETelefone(ss, email, tel);
+  if (!achado) {
+    return {
+      ok: true,
+      encontrado: false,
+      error:
+        "Não encontramos inscrição com este e-mail e telefone. Confira se são os mesmos do formulário ou fale com a organização.",
+    };
+  }
+  return {
+    ok: true,
+    encontrado: true,
+    dados: linhaParaRespostaConsulta(achado.row, achado.origem),
+  };
 }
 
 function extrairPaymentIdNotificacao(obj, e) {
@@ -438,6 +639,11 @@ function doPost(e) {
       }
     }
 
+    if (data.tipo === "consulta_inscricao") {
+      var outConsulta = executarConsultaInscricao(data);
+      return ContentService.createTextOutput(JSON.stringify(outConsulta)).setMimeType(ContentService.MimeType.JSON);
+    }
+
     if (data.tipo !== "inscricao_corrida") {
       var payId = extrairPaymentIdNotificacao(data, e);
       if (payId) {
@@ -552,6 +758,21 @@ function doPost(e) {
 }
 
 function doGet(e) {
+  if (e && e.parameter && e.parameter.backup === "1") {
+    var keyEsperada = PropertiesService.getScriptProperties().getProperty("BACKUP_JSON_KEY");
+    var keyRecebida = e.parameter.key != null ? String(e.parameter.key) : "";
+    if (!keyEsperada || keyRecebida !== keyEsperada) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "Não autorizado. Defina BACKUP_JSON_KEY nas Propriedades do script e use ?backup=1&key=..." }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    try {
+      var payloadBackup = gerarPayloadBackupListaInscritos();
+      return ContentService.createTextOutput(JSON.stringify(payloadBackup, null, 2)).setMimeType(ContentService.MimeType.JSON);
+    } catch (errBackup) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(errBackup) })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
   if (e && e.parameter && e.parameter.topic === "payment" && e.parameter.id) {
     var lock = LockService.getScriptLock();
     lock.waitLock(30000);

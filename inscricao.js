@@ -91,7 +91,7 @@
   }
 
   function montarMensagemWhatsApp(dados) {
-    var nomeEvento = cfg.nomeEvento || "Corrida Sagrado Coração de Jesus";
+    var nomeEvento = cfg.nomeEvento || "Corrida Mariana em prol do ECC e EJC de Sanharó";
     var valor = dados.valorFormatado || cfg.valorInscricao || "";
     var linhas = [
       "Olá! Segue minha inscrição na *" + nomeEvento + "*.",
@@ -257,12 +257,13 @@
     if (passoFinal) {
       if (v === "mercado_pago_online" && mpOk) {
         passoFinal.textContent =
-          "Ao enviar, você será levado ao Mercado Pago para concluir o pagamento com PIX ou cartão.";
+          "Ao enviar, você será levado ao Mercado Pago para concluir com PIX ou cartão.";
       } else if (v === "presencial_secretaria") {
         passoFinal.textContent =
-          "Depois, abra o WhatsApp com a mensagem pronta e envie o comprovante do pagamento.";
+          "Depois, abra o WhatsApp com a mensagem pronta e envie o comprovante.";
       } else {
-        passoFinal.textContent = "Escolha acima como vai pagar e siga as instruções ao lado.";
+        passoFinal.textContent =
+          "Escolha no formulário como vai pagar — as instruções aparecem aqui em cima.";
       }
     }
   }
@@ -609,5 +610,184 @@
       (cfg.nomeEvento || "corrida") +
       ".";
     patWa.href = "https://wa.me/" + d2 + "?text=" + encodeURIComponent(msg);
+  }
+})();
+
+/** Consulta de inscrição por e-mail + telefone (Apps Script tipo consulta_inscricao). */
+(function () {
+  "use strict";
+  var cfg = window.CORRIDA_CONFIG || {};
+  var formConsulta = document.getElementById("form-consulta");
+  var resultadoEl = document.getElementById("consulta-resultado");
+  var erroEl = document.getElementById("consulta-erro");
+  var btnConsulta = document.getElementById("btn-consulta");
+  if (!formConsulta || !resultadoEl) return;
+
+  function apenasDigitosTel(str) {
+    return String(str || "").replace(/\D/g, "");
+  }
+
+  function formatarTelefoneBR(valor) {
+    var d = apenasDigitosTel(valor).slice(0, 11);
+    if (d.length === 0) return "";
+    if (d.length <= 2) return "(" + d;
+    if (d.length <= 6) return "(" + d.slice(0, 2) + ") " + d.slice(2);
+    if (d.length <= 10) return "(" + d.slice(0, 2) + ") " + d.slice(2, 6) + "-" + d.slice(6);
+    return "(" + d.slice(0, 2) + ") " + d.slice(2, 7) + "-" + d.slice(7);
+  }
+
+  function escapeHtml(s) {
+    var d = document.createElement("div");
+    d.textContent = s == null ? "" : String(s);
+    return d.innerHTML;
+  }
+
+  function setConsultaLoading(loading) {
+    if (!btnConsulta) return;
+    var label = btnConsulta.querySelector(".consulta-form__label");
+    if (loading) {
+      btnConsulta.disabled = true;
+      btnConsulta.classList.add("consulta-form__submit--loading");
+      if (label && !btnConsulta.dataset.labelOriginal) btnConsulta.dataset.labelOriginal = label.textContent;
+      if (label) label.textContent = "Consultando…";
+    } else {
+      btnConsulta.disabled = false;
+      btnConsulta.classList.remove("consulta-form__submit--loading");
+      if (label) label.textContent = btnConsulta.dataset.labelOriginal || "Consultar";
+    }
+  }
+
+  function limparConsultaUi() {
+    if (erroEl) {
+      erroEl.hidden = true;
+      erroEl.textContent = "";
+    }
+    resultadoEl.hidden = true;
+    resultadoEl.innerHTML = "";
+  }
+
+  function mostrarErro(msg) {
+    limparConsultaUi();
+    if (erroEl) {
+      erroEl.textContent = msg;
+      erroEl.hidden = false;
+    }
+  }
+
+  function renderDados(d) {
+    var linhas = [
+      ["Protocolo", d.protocolo || "—"],
+      ["Situação", d.situacaoLista || "—"],
+      ["Status do pagamento", d.statusPagamento || "—"],
+      ["Nome", d.nome || "—"],
+      ["Cidade", d.cidade || "—"],
+      ["Lote", d.loteNome || "—"],
+      ["Valor", d.valorReais || "—"],
+      ["Forma de pagamento", d.formaPagamento || "—"],
+      ["Percurso", d.percurso || "—"],
+      ["Tam. camisa", d.camisa || "—"],
+    ];
+    var parts = ['<h3 class="consulta-resultado__titulo">Inscrição encontrada</h3>', '<dl class="consulta-dl">'];
+    linhas.forEach(function (pair) {
+      parts.push(
+        "<dt>" +
+          escapeHtml(pair[0]) +
+          "</dt><dd>" +
+          escapeHtml(pair[1]) +
+          "</dd>"
+      );
+    });
+    parts.push("</dl>");
+    resultadoEl.innerHTML = parts.join("");
+    resultadoEl.hidden = false;
+    resultadoEl.focus();
+  }
+
+  async function enviarConsulta(payload) {
+    var url = (cfg.webhookUrl || "").trim();
+    if (!url) {
+      return { ok: false, error: "Consulta indisponível: configure webhookUrl (URL do Apps Script) em config.js." };
+    }
+    var body = JSON.stringify(payload);
+    var headersPlain = { "Content-Type": "text/plain;charset=utf-8" };
+    try {
+      var res = await fetch(url, {
+        method: "POST",
+        headers: headersPlain,
+        body: body,
+        mode: "cors",
+        credentials: "omit",
+      });
+      var text = (await res.text()).trim().replace(/^\uFEFF/, "");
+      var json = null;
+      try {
+        json = JSON.parse(text);
+      } catch (e) {
+        json = null;
+      }
+      if (!json) {
+        return {
+          ok: false,
+          error:
+            "Resposta inválida do servidor. No Google Apps Script: salve o código atualizado (função consulta), depois Implantar → Nova versão.",
+        };
+      }
+      return json;
+    } catch (e) {
+      return { ok: false, error: "Não foi possível consultar agora. Verifique a conexão ou tente mais tarde." };
+    }
+  }
+
+  formConsulta.addEventListener("submit", async function (e) {
+    e.preventDefault();
+    limparConsultaUi();
+    var email = (document.getElementById("consulta-email") || {}).value;
+    var telRaw = (document.getElementById("consulta-telefone") || {}).value;
+    email = email ? email.trim().toLowerCase() : "";
+    var telDigits = apenasDigitosTel(telRaw);
+    if (!email || !telRaw || !telRaw.trim()) {
+      mostrarErro("Preencha o e-mail e o telefone (WhatsApp) usados na inscrição.");
+      return;
+    }
+    if (telDigits.length < 10) {
+      mostrarErro("Informe o telefone com DDD (ex.: (87) 99999-9999).");
+      return;
+    }
+
+    setConsultaLoading(true);
+    var out = await enviarConsulta({
+      tipo: "consulta_inscricao",
+      email: email,
+      telefone: telRaw,
+    });
+    setConsultaLoading(false);
+
+    if (!out.ok) {
+      mostrarErro(out.error || "Erro ao consultar.");
+      return;
+    }
+    if (out.encontrado && out.dados) {
+      renderDados(out.dados);
+      return;
+    }
+    mostrarErro(out.error || "Inscrição não encontrada. Confira e-mail e telefone.");
+  });
+
+  var emailConsulta = document.getElementById("consulta-email");
+  if (emailConsulta) {
+    emailConsulta.addEventListener("blur", function () {
+      emailConsulta.value = emailConsulta.value.trim().toLowerCase();
+    });
+  }
+  var telConsulta = document.getElementById("consulta-telefone");
+  if (telConsulta) {
+    telConsulta.addEventListener("input", function () {
+      telConsulta.value = formatarTelefoneBR(telConsulta.value);
+      var len = telConsulta.value.length;
+      telConsulta.setSelectionRange(len, len);
+    });
+    telConsulta.addEventListener("blur", function () {
+      telConsulta.value = formatarTelefoneBR(telConsulta.value);
+    });
   }
 })();
