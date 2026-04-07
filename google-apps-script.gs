@@ -14,6 +14,10 @@
  *
  * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca por e-mail + telefone (só dígitos) na lista oficial e em Inscrições pendentes MP.
  *
+ * Duplicata + Mercado Pago: se o POST vier com mercadoPago: true, linhas não pagas com o mesmo e-mail ou telefone
+ * (status "Aguardando pagamento online" ou "Pendente (presencial)") são removidas antes da checagem de duplicata,
+ * para o inscrito poder gerar um novo checkout. Inscrição já paga (ex.: "Pago (Mercado Pago)") continua bloqueando.
+ *
  * Backup JSON (lista oficial): defina BACKUP_JSON_KEY nas Propriedades do script. GET:
  *   URL_DA_WEB_APP/exec?backup=1&key=SUA_CHAVE
  * Copie o JSON e salve em data/inscritos-confirmados.json no projeto. Ou execute exportarBackupJsonParaDrive() no editor (cria arquivo datado no Drive).
@@ -122,6 +126,55 @@ function jaTemCadastroQualquerAba(ss, email, telDigits) {
   if (pend.getLastRow() === 0) return null;
   garantirCabecalhosPlanilha(pend);
   return jaTemCadastro(pend, email, telDigits);
+}
+
+/**
+ * Classifica status da coluna "Status pagamento" para decidir se ainda pode abrir novo checkout MP.
+ * nao_pago = aguardando MP ou pendente presencial; pago = confirmado; desconhecido = tratar como já definitivo (bloqueia duplicata).
+ */
+function classificarStatusPagamento(status) {
+  var s = String(status || "").trim().toLowerCase();
+  if (!s) return "desconhecido";
+  if (s.indexOf("aguardando") !== -1) return "nao_pago";
+  if (s.indexOf("pendente") !== -1) return "nao_pago";
+  if (s.indexOf("não pago") !== -1 || s.indexOf("nao pago") !== -1) return "nao_pago";
+  if (s.indexOf("pago") !== -1) return "pago";
+  return "desconhecido";
+}
+
+function linhaCombinaEmailOuTelefone(row, email, telDigits) {
+  var em = String(email).trim().toLowerCase();
+  var rowEmail = String(row[COL_IX_EMAIL] || "").trim().toLowerCase();
+  var td = soDigitos(telDigits);
+  var rowTel = soDigitos(row[COL_IX_TELEFONE]);
+  if (em && rowEmail && rowEmail === em) return true;
+  if (td.length >= 10 && rowTel && telefonesIguaisBR(td, rowTel)) return true;
+  return false;
+}
+
+/**
+ * Remove linhas não pagas (mesmo e-mail ou telefone) na lista oficial e em pendentes MP,
+ * para o inscrito poder gerar um novo link de pagamento sem erro de duplicata.
+ * Só deve ser chamado quando o formulário envia mercadoPago: true.
+ */
+function removerInscricoesNaoPagasParaNovoCheckoutMp(ss, email, telDigits) {
+  function purgeSheet(sh) {
+    if (!sh || sh.getLastRow() === 0) return;
+    garantirCabecalhosPlanilha(sh);
+    var values = sh.getDataRange().getValues();
+    var start = 0;
+    if (values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo") {
+      start = 1;
+    }
+    for (var i = values.length - 1; i >= start; i--) {
+      var row = values[i];
+      if (!linhaCombinaEmailOuTelefone(row, email, telDigits)) continue;
+      if (classificarStatusPagamento(row[COL_IX_STATUS]) !== "nao_pago") continue;
+      sh.deleteRow(i + 1);
+    }
+  }
+  purgeSheet(obterAbaPendentes(ss));
+  purgeSheet(obterAbaInscricoes(ss));
 }
 
 function contarInscricoesLotePromo(sheet) {
@@ -761,7 +814,12 @@ function doPost(e) {
       ).setMimeType(ContentService.MimeType.JSON);
     }
 
-    var dup = jaTemCadastroQualquerAba(ss, data.email, data.telefoneDigitos || data.telefone);
+    var telDup = data.telefoneDigitos || data.telefone;
+    if (data.mercadoPago) {
+      removerInscricoesNaoPagasParaNovoCheckoutMp(ss, data.email, telDup);
+    }
+
+    var dup = jaTemCadastroQualquerAba(ss, data.email, telDup);
     if (dup === "email") {
       return ContentService.createTextOutput(
         JSON.stringify({
