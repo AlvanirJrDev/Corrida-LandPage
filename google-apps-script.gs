@@ -6,14 +6,22 @@
  * E-mail após pagamento: MailApp na confirmação do pagamento — na 1ª vez o Apps Script pede permissão de envio.
  *
  * Propriedades do script (Projeto ⚙ → Propriedades do projeto → Propriedades do script):
- *   MERCADO_PAGO_ACCESS_TOKEN = Access Token (mercadopago.com.br/developers)
+ *   MERCADO_PAGO_ACCESS_TOKEN = Access Token Mercado Pago (aba Produção: APP_USR-... quando config.js → useSandbox: false).
  *   WEB_APP_URL (opcional) = mesma URL do webhookUrl em config.js. Se não definir, usa WEB_APP_URL_FALLBACK no código abaixo.
+ *
+ * Produção MP: (1) token de produção em MERCADO_PAGO_ACCESS_TOKEN, (2) config.js com useSandbox: false e urlRetorno HTTPS real,
+ * (3) Implantar → Gerenciar implantações → Nova versão na Web App.
  *
  * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca por e-mail + telefone (só dígitos) na lista oficial e em Inscrições pendentes MP.
  *
  * Backup JSON (lista oficial): defina BACKUP_JSON_KEY nas Propriedades do script. GET:
  *   URL_DA_WEB_APP/exec?backup=1&key=SUA_CHAVE
- * Copie o JSON e salve em data/inscritos-confirmados.json no projeto. Ou execute exportarBackupJsonParaDrive() no editor (cria arquivo no Google Drive).
+ * Copie o JSON e salve em data/inscritos-confirmados.json no projeto. Ou execute exportarBackupJsonParaDrive() no editor (cria arquivo datado no Drive).
+ *
+ * Backup automático de segurança: após cada inscrição (presencial, pendente MP com checkout OK, ou pagamento MP aprovado),
+ * o script atualiza um único arquivo JSON no Google Drive (lista oficial + pendentes MP). Na 1ª vez cria o arquivo na raiz do Drive
+ * do dono do script e grava BACKUP_DRIVE_FILE_ID nas propriedades. Opcional: BACKUP_DRIVE_FOLDER_ID = ID da pasta onde criar/atualizar.
+ * Para desligar: AUTO_BACKUP_DRIVE = 0 nas Propriedades do script.
  *
  * Compartilhamento da planilha (Google Drive): quem tiver permissão de EDITOR pode ver, alterar e apagar
  * todas as linhas. Não use "Qualquer pessoa com o link pode editar" para o público. Restrinja a
@@ -306,13 +314,8 @@ function linhaParaObjetoBackup(row) {
   return o;
 }
 
-/**
- * Snapshot da aba Lista de inscritos (cabeçalho ignorado). Uso: backup local em JSON.
- */
-function gerarPayloadBackupListaInscritos() {
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
-  var sheet = obterAbaInscricoes(ss);
-  if (!sheet) throw new Error("Aba Lista de inscritos não encontrada.");
+function listaBackupDaAba(sheet) {
+  if (!sheet || sheet.getLastRow() === 0) return [];
   garantirCabecalhosPlanilha(sheet);
   var values = sheet.getDataRange().getValues();
   var start = 0;
@@ -323,6 +326,18 @@ function gerarPayloadBackupListaInscritos() {
   for (var i = start; i < values.length; i++) {
     lista.push(linhaParaObjetoBackup(values[i]));
   }
+  return lista;
+}
+
+/**
+ * Snapshot da aba Lista de inscritos (cabeçalho ignorado). Uso: backup local em JSON.
+ */
+function gerarPayloadBackupListaInscritos() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var sheet = obterAbaInscricoes(ss);
+  if (!sheet) throw new Error("Aba Lista de inscritos não encontrada.");
+  garantirCabecalhosPlanilha(sheet);
+  var lista = listaBackupDaAba(sheet);
   return {
     meta: {
       descricao: "Backup da aba Lista de inscritos (inscrições na lista oficial do evento).",
@@ -334,6 +349,76 @@ function gerarPayloadBackupListaInscritos() {
     },
     inscricoes: lista,
   };
+}
+
+/**
+ * Snapshot completo para backup automático: lista oficial + aba de pendentes Mercado Pago.
+ */
+function gerarPayloadBackupCompleto() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var sheet = obterAbaInscricoes(ss);
+  if (!sheet) throw new Error("Aba Lista de inscritos não encontrada.");
+  garantirCabecalhosPlanilha(sheet);
+  var listaOficial = listaBackupDaAba(sheet);
+  var pend = obterAbaPendentes(ss);
+  var listaPend = listaBackupDaAba(pend);
+  return {
+    meta: {
+      descricao: "Backup automático: lista oficial + inscrições pendentes (Mercado Pago).",
+      geradoEm: new Date().toISOString(),
+      fonte: "Google Sheets",
+      planilhaId: ID_PLANILHA,
+      totalInscricoesOficial: listaOficial.length,
+      totalPendentesMercadoPago: listaPend.length,
+    },
+    inscricoes: listaOficial,
+    pendentesMercadoPago: listaPend,
+  };
+}
+
+var NOME_ARQUIVO_BACKUP_AUTO = "backup-seguranca-inscricoes-corrida-mariana.json";
+
+/**
+ * Atualiza (ou cria) um JSON no Drive com lista oficial + pendentes. Não interrompe inscrição se falhar.
+ */
+function sincronizarBackupSegurancaNoDrive() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (String(props.getProperty("AUTO_BACKUP_DRIVE") || "") === "0") return;
+
+    var payload = gerarPayloadBackupCompleto();
+    var json = JSON.stringify(payload, null, 2);
+    var fileId = props.getProperty("BACKUP_DRIVE_FILE_ID");
+    var folderId = String(props.getProperty("BACKUP_DRIVE_FOLDER_ID") || "").trim();
+    var file;
+
+    if (fileId) {
+      file = DriveApp.getFileById(fileId);
+      file.setContent(json);
+    } else if (folderId) {
+      var folder = DriveApp.getFolderById(folderId);
+      var itF = folder.getFilesByName(NOME_ARQUIVO_BACKUP_AUTO);
+      if (itF.hasNext()) {
+        file = itF.next();
+        file.setContent(json);
+      } else {
+        file = folder.createFile(NOME_ARQUIVO_BACKUP_AUTO, json, MimeType.PLAIN_TEXT);
+      }
+      props.setProperty("BACKUP_DRIVE_FILE_ID", file.getId());
+    } else {
+      var root = DriveApp.getRootFolder();
+      var itR = root.getFilesByName(NOME_ARQUIVO_BACKUP_AUTO);
+      if (itR.hasNext()) {
+        file = itR.next();
+        file.setContent(json);
+      } else {
+        file = DriveApp.createFile(NOME_ARQUIVO_BACKUP_AUTO, json, MimeType.PLAIN_TEXT);
+      }
+      props.setProperty("BACKUP_DRIVE_FILE_ID", file.getId());
+    }
+  } catch (err) {
+    Logger.log("sincronizarBackupSegurancaNoDrive: " + err);
+  }
 }
 
 /**
@@ -487,12 +572,14 @@ function processarNotificacaoPagamentoMercadoPago(paymentId) {
 
   if (jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
     pend.deleteRow(rowIndex);
+    sincronizarBackupSegurancaNoDrive();
     return;
   }
 
   main.appendRow(rowData);
   pend.deleteRow(rowIndex);
   enviarEmailPagamentoConfirmado(rowData);
+  sincronizarBackupSegurancaNoDrive();
 }
 
 /**
@@ -731,6 +818,7 @@ function doPost(e) {
       if (mpRes.url) {
         out.checkoutUrl = mpRes.url;
         out.aguardandoPagamento = true;
+        sincronizarBackupSegurancaNoDrive();
       } else {
         if (pend.getLastRow() > 0) {
           pend.deleteRow(pend.getLastRow());
@@ -741,6 +829,7 @@ function doPost(e) {
     } else {
       var row = montarLinhaInscricao(data, "Pendente (presencial)");
       sheet.appendRow(row);
+      sincronizarBackupSegurancaNoDrive();
     }
 
     return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);

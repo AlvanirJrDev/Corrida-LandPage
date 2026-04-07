@@ -552,21 +552,28 @@
   });
 
   if (copyPixBtn) {
+    var copyPixLabel = copyPixBtn.textContent;
     copyPixBtn.addEventListener("click", function () {
       var chave = cfg.pixChave || "";
       if (!chave || chave.indexOf("(") === 0) {
-        window.alert("Defina a chave PIX no arquivo config.js no seu computador antes de publicar.");
+        copyPixBtn.textContent = "Chave ainda não configurada";
+        setTimeout(function () {
+          copyPixBtn.textContent = copyPixLabel;
+        }, 2200);
         return;
       }
       navigator.clipboard.writeText(chave).then(
         function () {
           copyPixBtn.textContent = "Copiado!";
           setTimeout(function () {
-            copyPixBtn.textContent = "Copiar chave PIX";
+            copyPixBtn.textContent = copyPixLabel;
           }, 2000);
         },
         function () {
-          window.alert("Copie manualmente a chave PIX acima.");
+          copyPixBtn.textContent = "Copie manualmente acima";
+          setTimeout(function () {
+            copyPixBtn.textContent = copyPixLabel;
+          }, 2500);
         }
       );
     });

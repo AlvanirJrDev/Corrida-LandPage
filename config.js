@@ -34,17 +34,15 @@ window.CORRIDA_CONFIG = {
   nomeEvento: "Corrida Mariana em prol do ECC e EJC de Sanharó",
 
   /**
-   * Mercado Pago (Checkout Pro — redireciona para página segura de pagamento).
-   * ativo: true para exibir a opção "Mercado Pago" e abrir o checkout ao escolher pagamento online.
-   * urlRetorno: URL HTTPS da página de inscrição após pagar (deixe "" para usar a página atual). Obrigatório em produção com domínio fixo para o botão "voltar" do MP funcionar bem.
-   * useSandbox: true = mesmo ambiente das "Credenciais de teste" no painel MP. false = "Credenciais de produção".
-   * O Access Token NÃO vai aqui — só no Apps Script → Propriedades → MERCADO_PAGO_ACCESS_TOKEN (teste OU produção, alinhado a useSandbox).
-   * Depois de colar o token ou alterar google-apps-script.gs: Implantar → Nova versão (senão o site usa código antigo).
+   * Mercado Pago — PRODUÇÃO (Checkout Pro)
+   * - useSandbox: false + Access Token da aba "Credenciais de produção" (APP_USR-...) no Apps Script.
+   * - urlRetorno: URL HTTPS pública do site no ar (Netlify, Pages, domínio próprio).
+   * - Apps Script: Propriedades → MERCADO_PAGO_ACCESS_TOKEN = token produção | Implantar → Nova versão.
    */
   mercadoPago: {
     ativo: true,
-    urlRetorno: "",
-    useSandbox: true,
+    urlRetorno: "https://superlative-babka-667cbe.netlify.app/",
+    useSandbox: false,
   },
 
   /**
