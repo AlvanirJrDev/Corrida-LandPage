@@ -15,8 +15,14 @@
  * Pagamento online + consulta de inscrição: webhookUrl = URL da Web App (/exec). O google-apps-script.gs tem WEB_APP_URL_FALLBACK igual a ela;
  * opcionalmente defina WEB_APP_URL nas Propriedades do script para sobrescrever.
  */
+var MODO_TESTE = true;
+
+var PRECO_PROMO = MODO_TESTE ? 1 : 50;
+var PRECO_REGULAR = MODO_TESTE ? 1 : 55;
+
 window.CORRIDA_CONFIG = {
-  whatsappNumero: "5511999999999",
+  modoTeste: MODO_TESTE,
+  whatsappNumero: "5587991200165",
   /**
    * ORDEM (não existe link no site que “cria” a planilha — você cria no Google e depois cola aqui):
    * 1) Acesse https://sheets.google.com e faça login com a conta em que a planilha deve ficar.
@@ -29,7 +35,7 @@ window.CORRIDA_CONFIG = {
   webhookUrl:
     "https://script.google.com/a/macros/redealia.com/s/AKfycbwClwfOb9G4AXWFW0tjQAMAkuX_VlmlBHJC6nFPuGczHZZBM0XLv4p36mYF0RvvHCu7/exec",
   /** Usado só se a lista lotes estiver vazia (fallback). */
-  valorInscricao: "R$ 45,00",
+  valorInscricao: "R$ " + PRECO_REGULAR.toFixed(2).replace(".", ","),
   pixChave: "(informe a chave PIX ou orientação de pagamento)",
   nomeEvento: "Corrida Mariana em prol do ECC e EJC de Sanharó",
 
@@ -46,19 +52,34 @@ window.CORRIDA_CONFIG = {
   },
 
   /**
-   * Só lote promocional ativo. limite = máximo de inscrições (50 camisas = 50 linhas neste lote).
-   * O mesmo limite está no google-apps-script.gs (LIMITE_LOTE_PROMO) — altere nos dois se mudar.
+   * Lotes ativos:
+   * - Promo: 50 camisas (R$ 1,00 no teste | R$ 50,00 em produção)
+   * - Regular: 150 camisas (R$ 1,00 no teste | R$ 55,00 em produção)
+   * Alinhar com google-apps-script.gs (IDs, valores e limites).
    */
   lotes: [
     {
       id: "promo",
       nome: "Lote promocional",
-      valorReais: 45,
-      descricao: "Limite de 50 inscrições (50 camisas). Quando esgotar, o sistema bloqueia novas inscrições.",
+      valorReais: PRECO_PROMO,
+      descricao:
+        "Primeiras 50 camisas por R$ " +
+        PRECO_PROMO.toFixed(2).replace(".", ",") +
+        (MODO_TESTE ? " (modo teste)." : "."),
       limite: 50,
+    },
+    {
+      id: "regular",
+      nome: "Lote regular",
+      valorReais: PRECO_REGULAR,
+      descricao:
+        "Após o promocional: 150 camisas por R$ " +
+        PRECO_REGULAR.toFixed(2).replace(".", ",") +
+        (MODO_TESTE ? " (modo teste)." : "."),
+      limite: 150,
     },
   ],
 
-  patrocinioTelefone: "(87) 99999-0000",
-  patrocinioTelefoneDigits: "5587999990000",
+  patrocinioTelefone: "(87) 99120-0165",
+  patrocinioTelefoneDigits: "5587991200165",
 };

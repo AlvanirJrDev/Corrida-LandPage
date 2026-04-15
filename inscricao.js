@@ -235,6 +235,19 @@
     document.querySelectorAll("[data-valor-inscricao]").forEach(function (el) {
       el.textContent = valor;
     });
+    var menorValor = valor;
+    var ativos = lotesAtivos();
+    if (ativos.length) {
+      var menor = Number(ativos[0].valorReais);
+      for (var i = 1; i < ativos.length; i++) {
+        var v = Number(ativos[i].valorReais);
+        if (!isNaN(v) && (isNaN(menor) || v < menor)) menor = v;
+      }
+      if (!isNaN(menor)) menorValor = formatarMoedaBR(menor);
+    }
+    document.querySelectorAll("[data-hero-preco]").forEach(function (el) {
+      el.textContent = menorValor;
+    });
   }
 
   var selectLote = document.getElementById("select-lote");
@@ -325,6 +338,33 @@
     if (!statusEl) return;
     statusEl.hidden = true;
     statusEl.textContent = "";
+  }
+
+  function isErroLotePromoEsgotado(msg) {
+    var m = String(msg || "").toLowerCase();
+    return m.indexOf("lote promocional esgotado") !== -1;
+  }
+
+  function tentarMigrarParaLoteRegular(dados, payload) {
+    if (String(dados.lote || "").trim() !== "promo") return false;
+    var loteRegular = acharLote("regular");
+    if (!loteRegular) return false;
+
+    var selectLoteEl = document.getElementById("select-lote");
+    if (selectLoteEl) {
+      selectLoteEl.value = "regular";
+      atualizarUiLote();
+    }
+
+    dados.lote = "regular";
+    dados.loteNome = loteRegular.nome || "Lote regular";
+    dados.valorReais = Number(loteRegular.valorReais) || 0;
+    dados.valorFormatado = formatarMoedaBR(dados.valorReais);
+
+    payload.lote = dados.lote;
+    payload.loteNome = dados.loteNome;
+    payload.valorReais = dados.valorReais;
+    return true;
   }
 
   async function enviarWebhook(payload) {
@@ -476,6 +516,14 @@
     }
 
     var result = await enviarWebhook(payload);
+    var trocouParaRegular = false;
+
+    if (!result.ok && !result.skipped && isErroLotePromoEsgotado(result.error)) {
+      trocouParaRegular = tentarMigrarParaLoteRegular(dados, payload);
+      if (trocouParaRegular) {
+        result = await enviarWebhook(payload);
+      }
+    }
 
     if (result.checkoutUrl) {
       window.location.href = result.checkoutUrl;
@@ -528,6 +576,11 @@
       } else {
         sucessoTexto.innerHTML =
           "Guarde esse número. Agora envie o <strong>comprovante de pagamento</strong> pelo WhatsApp — a mensagem já vem com seus dados.";
+      }
+      if (trocouParaRegular) {
+        sucessoTexto.innerHTML =
+          "O <strong>lote promocional esgotou</strong> e sua inscrição foi ajustada automaticamente para o <strong>lote regular (R$ 55,00)</strong>. " +
+          sucessoTexto.innerHTML;
       }
     }
 
@@ -593,6 +646,11 @@
     });
   }
   aplicarNumeroWhatsApp();
+
+  var testModeBanner = document.getElementById("test-mode-banner");
+  if (testModeBanner) {
+    testModeBanner.hidden = !cfg.modoTeste;
+  }
 
   var pixDisplay = document.getElementById("pix-chave-display");
   if (pixDisplay && cfg.pixChave) pixDisplay.textContent = cfg.pixChave;

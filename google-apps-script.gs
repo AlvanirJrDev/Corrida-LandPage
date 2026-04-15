@@ -37,6 +37,13 @@ var ID_PLANILHA = "1BLVaZLh3Dq64WvUoQ2_XhPXgDAB-uOkW0t-Gek9gaKc";
 
 /** Alinhe com config.js → nomeEvento (texto do e-mail de confirmação). */
 var NOME_EVENTO_EMAIL = "Corrida Mariana em prol do ECC e EJC de Sanharó";
+var DATA_EVENTO_EMAIL = "31 de maio de 2026";
+var HORARIO_EVENTO_EMAIL = "Largada a partir das 7h";
+var LOCAL_EVENTO_EMAIL = "Sanharó, Pernambuco";
+var WHATSAPP_ORGANIZACAO_EMAIL = "5587991200165";
+var INSTAGRAM_ORGANIZACAO_URL = "https://instagram.com/";
+/** Use URL pública da logo (opcional). Ex.: https://seusite.com/assets/logo.png */
+var LOGO_EMAIL_URL = "";
 
 /** Mesma URL que config.js → webhookUrl (termina em /exec). Alinhe os dois se mudar a implantação. */
 var WEB_APP_URL_FALLBACK =
@@ -46,9 +53,11 @@ var WEB_APP_URL_FALLBACK =
 /** Aba "Inscrições pendentes MP": só pagamento online antes de confirmar no MP */
 var NOME_ABA_PENDENTES = "Inscrições pendentes MP";
 
-/** Limite lote promocional (50): alinhar com config.js */
+/** Limites de lotes: alinhar com config.js */
 var LIMITE_LOTE_PROMO = 50;
 var ID_LOTE_PROMO = "promo";
+var LIMITE_LOTE_REGULAR = 150;
+var ID_LOTE_REGULAR = "regular";
 /** Índice da coluna "Lote id" (0-based) */
 var COL_IX_LOTE = 8;
 var COL_IX_EMAIL = 3;
@@ -177,7 +186,7 @@ function removerInscricoesNaoPagasParaNovoCheckoutMp(ss, email, telDigits) {
   purgeSheet(obterAbaInscricoes(ss));
 }
 
-function contarInscricoesLotePromo(sheet) {
+function contarInscricoesLote(sheet, loteId) {
   var values = sheet.getDataRange().getValues();
   var start = 0;
   if (values.length > 0 && String(values[0][1]) === "Protocolo") {
@@ -185,19 +194,19 @@ function contarInscricoesLotePromo(sheet) {
   }
   var n = 0;
   for (var i = start; i < values.length; i++) {
-    if (String(values[i][COL_IX_LOTE]).trim() === ID_LOTE_PROMO) {
+    if (String(values[i][COL_IX_LOTE]).trim() === String(loteId)) {
       n++;
     }
   }
   return n;
 }
 
-function contarInscricoesLotePromoTotal(ss) {
-  var n = contarInscricoesLotePromo(obterAbaInscricoes(ss));
+function contarInscricoesLoteTotal(ss, loteId) {
+  var n = contarInscricoesLote(obterAbaInscricoes(ss), loteId);
   var pend = obterAbaPendentes(ss);
   if (pend.getLastRow() > 0) {
     garantirCabecalhosPlanilha(pend);
-    n += contarInscricoesLotePromo(pend);
+    n += contarInscricoesLote(pend, loteId);
   }
   return n;
 }
@@ -540,6 +549,15 @@ function extrairPaymentIdNotificacao(obj, e) {
   return null;
 }
 
+function escapeHtmlEmail(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /**
  * Envia e-mail ao inscrito quando o pagamento MP é confirmado (webhook).
  * 1ª vez: o Apps Script pedirá permissão para enviar e-mail. Limite diário do Gmail se aplicam.
@@ -549,20 +567,173 @@ function enviarEmailPagamentoConfirmado(rowData) {
   var nome = String(rowData[COL_IX_NOME] || "").trim();
   var proto = String(rowData[COL_IX_PROTOCOLO] || "").trim();
   if (!email || email.indexOf("@") < 0) return;
+  var cidade = String(rowData[5] || "").trim();
+  var camisa = String(rowData[6] || "").trim();
+  var percurso = String(rowData[7] || "").trim();
+  var loteNome = String(rowData[9] || "").trim();
+  var valor = rowData[10];
+  var formaPagamento = String(rowData[11] || "").trim();
+  var statusPagamento = String(rowData[COL_IX_STATUS] || "").trim();
+  var waLink = "https://wa.me/" + String(WHATSAPP_ORGANIZACAO_EMAIL || "").replace(/\D/g, "");
+  var logoHtml = "";
+  if (String(LOGO_EMAIL_URL || "").trim()) {
+    logoHtml =
+      '<p style="margin:0 0 12px;text-align:center;">' +
+      '<img src="' +
+      escapeHtmlEmail(LOGO_EMAIL_URL) +
+      '" alt="Logo do evento" style="max-width:180px;height:auto;border:0;"/>' +
+      "</p>";
+  }
+
+  var valorFmt = "";
+  if (valor !== "" && valor !== null && valor !== undefined) {
+    if (typeof valor === "number") {
+      valorFmt = "R$ " + valor.toFixed(2).replace(".", ",");
+    } else {
+      valorFmt = String(valor).trim();
+      if (valorFmt && valorFmt.indexOf("R$") !== 0) valorFmt = "R$ " + valorFmt;
+    }
+  }
+
+  var corpoTexto =
+    "Olá" +
+    (nome ? " " + nome : "") +
+    ",\n\n" +
+    "Seu pagamento foi confirmado e sua inscrição está na lista oficial do evento.\n\n" +
+    "Resumo da inscrição:\n" +
+    "- Protocolo: " +
+    (proto || "—") +
+    "\n" +
+    "- Nome: " +
+    (nome || "—") +
+    "\n" +
+    "- E-mail: " +
+    (email || "—") +
+    "\n" +
+    "- Cidade: " +
+    (cidade || "—") +
+    "\n" +
+    "- Camisa: " +
+    (camisa || "—") +
+    "\n" +
+    "- Percurso: " +
+    (percurso || "—") +
+    "\n" +
+    "- Lote: " +
+    (loteNome || "—") +
+    "\n" +
+    "- Valor: " +
+    (valorFmt || "—") +
+    "\n" +
+    "- Forma de pagamento: " +
+    (formaPagamento || "Mercado Pago") +
+    "\n" +
+    "- Status: " +
+    (statusPagamento || "Pago (Mercado Pago)") +
+    "\n\n" +
+    "Dados do evento:\n" +
+    "- Evento: " +
+    NOME_EVENTO_EMAIL +
+    "\n" +
+    "- Data: " +
+    DATA_EVENTO_EMAIL +
+    "\n" +
+    "- Horário: " +
+    HORARIO_EVENTO_EMAIL +
+    "\n" +
+    "- Local: " +
+    LOCAL_EVENTO_EMAIL +
+    "\n" +
+    "- WhatsApp: " +
+    WHATSAPP_ORGANIZACAO_EMAIL +
+    "\n\n" +
+    "Guarde este e-mail e o protocolo para qualquer consulta.\n\n" +
+    "— Organização";
+
+  var htmlBody =
+    '<div style="font-family:Arial,sans-serif;background:#f5f8fa;padding:24px;">' +
+    '<div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #d7e3ea;border-radius:12px;overflow:hidden;">' +
+    '<div style="background:linear-gradient(90deg,#004C74,#00BEE2);padding:18px 24px;color:#fff;">' +
+    '<h1 style="margin:0;font-size:22px;line-height:1.2;">Inscricao confirmada</h1>' +
+    '<p style="margin:8px 0 0;font-size:14px;opacity:.95;">' +
+    NOME_EVENTO_EMAIL +
+    "</p>" +
+    "</div>" +
+    '<div style="padding:24px;">' +
+    logoHtml +
+    '<p style="margin:0 0 16px;color:#16384a;font-size:15px;">Olá <strong>' +
+    escapeHtmlEmail(nome || "atleta") +
+    "</strong>, seu pagamento foi confirmado. Sua inscrição está na lista oficial.</p>" +
+    '<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 18px;">' +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Protocolo</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;font-weight:700;">' +
+    escapeHtmlEmail(proto || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Nome</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(nome || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">E-mail</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(email || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Cidade</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(cidade || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Camisa</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(camisa || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Percurso</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(percurso || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Lote</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(loteNome || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Valor</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;font-weight:700;">' +
+    escapeHtmlEmail(valorFmt || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Forma de pagamento</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(formaPagamento || "Mercado Pago") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;color:#456;">Status</td><td style="padding:9px 10px;color:#0b5f3b;font-weight:700;">' +
+    escapeHtmlEmail(statusPagamento || "Pago (Mercado Pago)") +
+    "</td></tr>" +
+    "</table>" +
+    '<div style="background:#f7fcff;border:1px solid #dceef7;border-radius:10px;padding:14px 16px;margin-bottom:14px;">' +
+    '<p style="margin:0 0 8px;color:#0d3a55;font-weight:700;">Informacoes do evento</p>' +
+    '<p style="margin:0;color:#1a4f6a;font-size:14px;line-height:1.6;">' +
+    "<strong>Data:</strong> " +
+    DATA_EVENTO_EMAIL +
+    "<br/>" +
+    "<strong>Horario:</strong> " +
+    HORARIO_EVENTO_EMAIL +
+    "<br/>" +
+    "<strong>Local:</strong> " +
+    escapeHtmlEmail(LOCAL_EVENTO_EMAIL) +
+    "</p>" +
+    "</div>" +
+    '<p style="margin:0 0 14px;color:#355264;font-size:13px;">Guarde este e-mail e seu protocolo para qualquer consulta.</p>' +
+    '<p style="margin:0 0 8px;text-align:center;">' +
+    '<a href="' +
+    escapeHtmlEmail(waLink) +
+    '" style="display:inline-block;background:#128c7e;color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:10px 16px;border-radius:8px;">Falar com a organização no WhatsApp</a>' +
+    "</p>" +
+    '<p style="margin:0;text-align:center;font-size:12px;color:#5a7889;">' +
+    'Instagram: <a href="' +
+    escapeHtmlEmail(INSTAGRAM_ORGANIZACAO_URL) +
+    '" style="color:#004c74;text-decoration:none;">' +
+    escapeHtmlEmail(INSTAGRAM_ORGANIZACAO_URL) +
+    "</a>" +
+    "</p>" +
+    "</div>" +
+    '<div style="padding:12px 24px;background:#f2f7fa;color:#5a7889;font-size:12px;">Organizacao — ' +
+    NOME_EVENTO_EMAIL +
+    "</div>" +
+    "</div>" +
+    "</div>";
   try {
     MailApp.sendEmail({
       to: email,
-      subject: "Pagamento confirmado — " + NOME_EVENTO_EMAIL,
-      body:
-        "Olá" +
-        (nome ? " " + nome : "") +
-        ",\n\n" +
-        "Seu pagamento foi confirmado pelo Mercado Pago e sua inscrição está na lista oficial.\n\n" +
-        "Protocolo: " +
-        proto +
-        "\n\n" +
-        "Guarde esse número. Em caso de dúvida, fale com a organização.\n\n" +
-        "— Organização",
+      subject: "Inscrição confirmada — " + NOME_EVENTO_EMAIL,
+      body: corpoTexto,
+      htmlBody: htmlBody,
     });
   } catch (err) {
     Logger.log("enviarEmailPagamentoConfirmado: " + err);
@@ -838,12 +1009,22 @@ function doPost(e) {
     }
 
     if (String(data.lote).trim() === ID_LOTE_PROMO) {
-      var ja = contarInscricoesLotePromoTotal(ss);
+      var ja = contarInscricoesLoteTotal(ss, ID_LOTE_PROMO);
       if (ja >= LIMITE_LOTE_PROMO) {
         return ContentService.createTextOutput(
           JSON.stringify({
             ok: false,
             error: "Lote promocional esgotado (limite de " + LIMITE_LOTE_PROMO + " inscrições).",
+          })
+        ).setMimeType(ContentService.MimeType.JSON);
+      }
+    } else if (String(data.lote).trim() === ID_LOTE_REGULAR) {
+      var jaReg = contarInscricoesLoteTotal(ss, ID_LOTE_REGULAR);
+      if (jaReg >= LIMITE_LOTE_REGULAR) {
+        return ContentService.createTextOutput(
+          JSON.stringify({
+            ok: false,
+            error: "Lote regular esgotado (limite de " + LIMITE_LOTE_REGULAR + " inscrições).",
           })
         ).setMimeType(ContentService.MimeType.JSON);
       }
