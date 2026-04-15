@@ -1136,25 +1136,44 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
 
   var ss = SpreadsheetApp.openById(ID_PLANILHA);
   var main = obterAbaInscricoes(ss);
+  var pend = obterAbaPendentes(ss);
   if (!main) {
     return { ok: false, error: "Aba principal de inscrições não encontrada." };
   }
   garantirCabecalhosPlanilha(main);
+  garantirCabecalhosPlanilha(pend);
 
-  var rowIndex = encontrarLinhaPorProtocolo(main, p);
-  if (rowIndex < 0) {
-    return { ok: false, error: "Protocolo não encontrado na lista principal.", protocolo: p };
+  var rowMain = encontrarLinhaPorProtocolo(main, p);
+  if (rowMain > 0) {
+    var statusMain = String(main.getRange(rowMain, COL_IX_STATUS + 1).getValue() || "").trim();
+    if (classificarStatusPagamento(statusMain) === "pago") {
+      return { ok: true, protocolo: p, statusAnterior: statusMain, statusNovo: statusMain, atualizado: false };
+    }
+    var novoStatusMain = "Pago (presencial confirmado)";
+    main.getRange(rowMain, COL_IX_STATUS + 1).setValue(novoStatusMain);
+    sincronizarBackupSegurancaNoDrive();
+    return { ok: true, protocolo: p, statusAnterior: statusMain || "—", statusNovo: novoStatusMain, atualizado: true };
   }
 
-  var statusAtual = String(main.getRange(rowIndex, COL_IX_STATUS + 1).getValue() || "").trim();
-  if (classificarStatusPagamento(statusAtual) === "pago") {
-    return { ok: true, protocolo: p, statusAnterior: statusAtual, statusNovo: statusAtual, atualizado: false };
+  var rowPend = encontrarLinhaPorProtocolo(pend, p);
+  if (rowPend < 0) {
+    return { ok: false, error: "Protocolo não encontrado.", protocolo: p };
   }
 
+  var rowData = pend.getRange(rowPend, 1, 1, CABECALHOS.length).getValues()[0];
+  while (rowData.length < CABECALHOS.length) {
+    rowData.push("");
+  }
+  var statusPend = String(rowData[COL_IX_STATUS] || "").trim();
   var novoStatus = "Pago (presencial confirmado)";
-  main.getRange(rowIndex, COL_IX_STATUS + 1).setValue(novoStatus);
+  rowData[COL_IX_STATUS] = novoStatus;
+
+  if (!jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
+    main.appendRow(rowData);
+  }
+  pend.deleteRow(rowPend);
   sincronizarBackupSegurancaNoDrive();
-  return { ok: true, protocolo: p, statusAnterior: statusAtual || "—", statusNovo: novoStatus, atualizado: true };
+  return { ok: true, protocolo: p, statusAnterior: statusPend || "—", statusNovo: novoStatus, atualizado: true };
 }
 
 function doPost(e) {
@@ -1289,7 +1308,9 @@ function doPost(e) {
       }
     } else {
       var row = montarLinhaInscricao(data, "Pendente (presencial)");
-      sheet.appendRow(row);
+      var pendPresencial = obterAbaPendentes(ss);
+      garantirCabecalhosPlanilha(pendPresencial);
+      pendPresencial.appendRow(row);
       sincronizarBackupSegurancaNoDrive();
       enviarEmailInscricaoRecebida(row);
     }
@@ -1309,6 +1330,13 @@ function doPost(e) {
 }
 
 function doGet(e) {
+  var protocoloQs = e && e.parameter && e.parameter.protocolo ? String(e.parameter.protocolo) : "";
+  var senhaQs = e && e.parameter && e.parameter.senha ? String(e.parameter.senha) : "";
+  if (protocoloQs && senhaQs) {
+    var outManualQs = confirmarPagamentoPresencialPorProtocolo(protocoloQs, senhaQs);
+    return respostaTexto(montarMensagemLeigaAtualizacaoPagamento(outManualQs));
+  }
+
   var path = e && e.pathInfo != null ? String(e.pathInfo) : "";
   path = path.replace(/^\/+|\/+$/g, "");
   if (path) {
@@ -1343,7 +1371,12 @@ function doGet(e) {
     }
     return ContentService.createTextOutput("OK");
   }
-  return ContentService.createTextOutput("Use POST JSON para inscrições.").setMimeType(ContentService.MimeType.TEXT);
+  return respostaTexto(
+    "Use POST JSON para inscricoes.\n\n" +
+      "Para aprovar pagamento presencial, use um destes formatos:\n" +
+      "1) /exec/PROTOCOLO/SENHA\n" +
+      "2) /exec?protocolo=PROTOCOLO&senha=SENHA"
+  );
 }
 
 function colocarCabecalhosNaPlanilha() {
