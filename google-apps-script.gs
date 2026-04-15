@@ -559,6 +559,147 @@ function escapeHtmlEmail(s) {
 }
 
 /**
+ * E-mail inicial da aplicação: enviado ao receber a inscrição.
+ * Para online, informa que está aguardando aprovação do pagamento.
+ */
+function enviarEmailInscricaoRecebida(rowData) {
+  var email = String(rowData[COL_IX_EMAIL] || "").trim();
+  if (!email || email.indexOf("@") < 0) return;
+  var nome = String(rowData[COL_IX_NOME] || "").trim();
+  var proto = String(rowData[COL_IX_PROTOCOLO] || "").trim();
+  var cidade = String(rowData[5] || "").trim();
+  var camisa = String(rowData[6] || "").trim();
+  var percurso = String(rowData[7] || "").trim();
+  var loteNome = String(rowData[9] || "").trim();
+  var valor = rowData[10];
+  var formaPagamento = String(rowData[11] || "").trim();
+  var statusPagamento = String(rowData[COL_IX_STATUS] || "").trim();
+  var aguardandoMp = statusPagamento.toLowerCase().indexOf("aguardando pagamento online") !== -1;
+  var waLink = "https://wa.me/" + String(WHATSAPP_ORGANIZACAO_EMAIL || "").replace(/\D/g, "");
+
+  var valorFmt = "";
+  if (valor !== "" && valor !== null && valor !== undefined) {
+    if (typeof valor === "number") {
+      valorFmt = "R$ " + valor.toFixed(2).replace(".", ",");
+    } else {
+      valorFmt = String(valor).trim();
+      if (valorFmt && valorFmt.indexOf("R$") !== 0) valorFmt = "R$ " + valorFmt;
+    }
+  }
+
+  var textoStatus = aguardandoMp
+    ? "Sua inscrição foi recebida e está aguardando a aprovação do pagamento no Mercado Pago."
+    : "Sua inscrição foi recebida e registrada pela organização.";
+
+  var corpoTexto =
+    "Olá" +
+    (nome ? " " + nome : "") +
+    ",\n\n" +
+    textoStatus +
+    "\n\n" +
+    "Protocolo: " +
+    (proto || "—") +
+    "\n" +
+    "Camisa: " +
+    (camisa || "—") +
+    "\n" +
+    "Percurso: " +
+    (percurso || "—") +
+    "\n" +
+    "Lote: " +
+    (loteNome || "—") +
+    "\n" +
+    "Valor: " +
+    (valorFmt || "—") +
+    "\n" +
+    "Forma de pagamento: " +
+    (formaPagamento || "—") +
+    "\n" +
+    "Status: " +
+    (statusPagamento || "—") +
+    "\n\n" +
+    "Evento: " +
+    NOME_EVENTO_EMAIL +
+    "\nData: " +
+    DATA_EVENTO_EMAIL +
+    "\nHorário: " +
+    HORARIO_EVENTO_EMAIL +
+    "\nLocal: " +
+    LOCAL_EVENTO_EMAIL +
+    "\n\nWhatsApp da organização: " +
+    WHATSAPP_ORGANIZACAO_EMAIL +
+    "\n\n— Organização";
+
+  var htmlBody =
+    '<div style="font-family:Arial,sans-serif;background:#f5f8fa;padding:24px;">' +
+    '<div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #d7e3ea;border-radius:12px;overflow:hidden;">' +
+    '<div style="background:linear-gradient(90deg,#004C74,#00BEE2);padding:18px 24px;color:#fff;">' +
+    '<h1 style="margin:0;font-size:22px;line-height:1.2;">Inscrição recebida</h1>' +
+    '<p style="margin:8px 0 0;font-size:14px;opacity:.95;">' +
+    NOME_EVENTO_EMAIL +
+    "</p>" +
+    "</div>" +
+    '<div style="padding:24px;">' +
+    '<p style="margin:0 0 16px;color:#16384a;font-size:15px;">Olá <strong>' +
+    escapeHtmlEmail(nome || "atleta") +
+    "</strong>. " +
+    escapeHtmlEmail(textoStatus) +
+    "</p>" +
+    '<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 16px;">' +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Protocolo</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;font-weight:700;">' +
+    escapeHtmlEmail(proto || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Cidade</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(cidade || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Camisa</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(camisa || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Percurso</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(percurso || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Lote</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(loteNome || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Valor</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;font-weight:700;">' +
+    escapeHtmlEmail(valorFmt || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Forma de pagamento</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    escapeHtmlEmail(formaPagamento || "—") +
+    "</td></tr>" +
+    '<tr><td style="padding:9px 10px;color:#456;">Status</td><td style="padding:9px 10px;color:#123;">' +
+    escapeHtmlEmail(statusPagamento || "—") +
+    "</td></tr>" +
+    "</table>" +
+    '<p style="margin:0 0 12px;font-size:13px;color:#355264;">Data: ' +
+    escapeHtmlEmail(DATA_EVENTO_EMAIL) +
+    " · Horário: " +
+    escapeHtmlEmail(HORARIO_EVENTO_EMAIL) +
+    " · Local: " +
+    escapeHtmlEmail(LOCAL_EVENTO_EMAIL) +
+    "</p>" +
+    '<p style="margin:0;text-align:center;">' +
+    '<a href="' +
+    escapeHtmlEmail(waLink) +
+    '" style="display:inline-block;background:#128c7e;color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:10px 16px;border-radius:8px;">Falar com a organização no WhatsApp</a>' +
+    "</p>" +
+    "</div>" +
+    "</div>" +
+    "</div>";
+
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: "Inscrição recebida — " + NOME_EVENTO_EMAIL,
+      body: corpoTexto,
+      htmlBody: htmlBody,
+    });
+  } catch (err) {
+    Logger.log("enviarEmailInscricaoRecebida: " + err);
+  }
+}
+
+/**
  * Envia e-mail ao inscrito quando o pagamento MP é confirmado (webhook).
  * 1ª vez: o Apps Script pedirá permissão para enviar e-mail. Limite diário do Gmail se aplicam.
  */
@@ -1058,6 +1199,7 @@ function doPost(e) {
         out.checkoutUrl = mpRes.url;
         out.aguardandoPagamento = true;
         sincronizarBackupSegurancaNoDrive();
+        enviarEmailInscricaoRecebida(rowPend);
       } else {
         if (pend.getLastRow() > 0) {
           pend.deleteRow(pend.getLastRow());
@@ -1069,6 +1211,7 @@ function doPost(e) {
       var row = montarLinhaInscricao(data, "Pendente (presencial)");
       sheet.appendRow(row);
       sincronizarBackupSegurancaNoDrive();
+      enviarEmailInscricaoRecebida(row);
     }
 
     return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
@@ -1137,4 +1280,55 @@ function colocarCabecalhosNaPlanilha() {
  */
 function autorizarAcessoExterno() {
   UrlFetchApp.fetch("https://api.mercadopago.com", { muteHttpExceptions: true });
+}
+
+/**
+ * Execute no editor para autorizar e validar envio de e-mail da aplicação.
+ * Opcional: defina EMAIL_TESTE nas Propriedades do script para receber em outro endereço.
+ */
+function testarEnvioEmailAplicacao() {
+  var props = PropertiesService.getScriptProperties();
+  var destino = String(props.getProperty("EMAIL_TESTE") || Session.getActiveUser().getEmail() || "").trim();
+  if (!destino || destino.indexOf("@") < 0) {
+    throw new Error("Defina EMAIL_TESTE nas Propriedades do script com um e-mail válido.");
+  }
+
+  var assunto = "Teste de envio — " + NOME_EVENTO_EMAIL;
+  var corpoTexto =
+    "Este é um teste de envio de e-mail da aplicação.\n\n" +
+    "Se você recebeu, o MailApp está autorizado e funcionando.\n\n" +
+    "Evento: " +
+    NOME_EVENTO_EMAIL +
+    "\nData: " +
+    DATA_EVENTO_EMAIL +
+    "\nHorário: " +
+    HORARIO_EVENTO_EMAIL +
+    "\nLocal: " +
+    LOCAL_EVENTO_EMAIL +
+    "\n\n— Organização";
+
+  var htmlBody =
+    '<div style="font-family:Arial,sans-serif;background:#f5f8fa;padding:24px;">' +
+    '<div style="max-width:680px;margin:0 auto;background:#fff;border:1px solid #d7e3ea;border-radius:12px;overflow:hidden;">' +
+    '<div style="background:linear-gradient(90deg,#004C74,#00BEE2);padding:18px 24px;color:#fff;">' +
+    '<h1 style="margin:0;font-size:22px;">Teste de envio concluído</h1>' +
+    '<p style="margin:8px 0 0;font-size:14px;opacity:.95;">' +
+    escapeHtmlEmail(NOME_EVENTO_EMAIL) +
+    "</p>" +
+    "</div>" +
+    '<div style="padding:24px;color:#16384a;">' +
+    '<p style="margin:0 0 12px;">Se você recebeu este e-mail, a sua aplicação está autorizada para enviar mensagens automáticas aos inscritos.</p>' +
+    '<p style="margin:0;font-size:13px;color:#355264;">Destino do teste: <strong>' +
+    escapeHtmlEmail(destino) +
+    "</strong></p>" +
+    "</div></div></div>";
+
+  MailApp.sendEmail({
+    to: destino,
+    subject: assunto,
+    body: corpoTexto,
+    htmlBody: htmlBody,
+  });
+
+  Logger.log("Teste de e-mail enviado para: " + destino);
 }
