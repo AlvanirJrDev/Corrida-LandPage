@@ -8,6 +8,8 @@
  * Propriedades do script (Projeto ⚙ → Propriedades do projeto → Propriedades do script):
  *   MERCADO_PAGO_ACCESS_TOKEN = Access Token Mercado Pago (aba Produção: APP_USR-... quando config.js → useSandbox: false).
  *   WEB_APP_URL (opcional) = mesma URL do webhookUrl em config.js. Se não definir, usa WEB_APP_URL_FALLBACK no código abaixo.
+ *   APROVACAO_SENHA = senha para aprovar pagamento presencial (endpoint /exec/{protocolo}/{senha}).
+ *   APROVACAO_EMAILS (opcional) = e-mails autorizados a aprovar (separados por vírgula ou ponto e vírgula).
  *
  * Produção MP: (1) token de produção em MERCADO_PAGO_ACCESS_TOKEN, (2) config.js com useSandbox: false e urlRetorno HTTPS real,
  * (3) Implantar → Gerenciar implantações → Nova versão na Web App.
@@ -22,7 +24,7 @@
  *   URL_DA_WEB_APP/exec?backup=1&key=SUA_CHAVE
  * Copie o JSON e salve em data/inscritos-confirmados.json no projeto. Ou execute exportarBackupJsonParaDrive() no editor (cria arquivo datado no Drive).
  *
- * Backup automático de segurança: após cada inscrição (presencial, pendente MP com checkout OK, ou pagamento MP aprovado),
+ * Backup automático de segurança: após cada inscrição pendente (presencial ou MP) e após aprovações,
  * o script atualiza um único arquivo JSON no Google Drive (lista oficial + pendentes MP). Na 1ª vez cria o arquivo na raiz do Drive
  * do dono do script e grava BACKUP_DRIVE_FILE_ID nas propriedades. Opcional: BACKUP_DRIVE_FOLDER_ID = ID da pasta onde criar/atualizar.
  * Para desligar: AUTO_BACKUP_DRIVE = 0 nas Propriedades do script.
@@ -51,8 +53,8 @@ var LOGO_EMAIL_URL = "";
 var WEB_APP_URL_FALLBACK =
   "https://script.google.com/a/macros/redealia.com/s/AKfycbwClwfOb9G4AXWFW0tjQAMAkuX_VlmlBHJC6nFPuGczHZZBM0XLv4p36mYF0RvvHCu7/exec";
 
-/** Aba principal: inscrições confirmadas (presencial) ou pagamento MP já aprovado */
-/** Aba "Inscrições pendentes MP": só pagamento online antes de confirmar no MP */
+/** Aba principal: inscrições confirmadas (pagamento aprovado). */
+/** Aba "Inscrições pendentes MP": fila de pendentes (Mercado Pago e presencial/PIX). */
 var NOME_ABA_PENDENTES = "Inscrições pendentes MP";
 
 /** Limites de lotes: alinhar com config.js */
@@ -333,7 +335,7 @@ function linhaParaRespostaConsulta(row, origem) {
   var situacaoLista =
     origem === "lista_oficial"
       ? "Inscrição na lista oficial do evento"
-      : "Inscrição aguardando confirmação do pagamento online (Mercado Pago)";
+      : "Inscrição pendente aguardando confirmação do pagamento";
   return {
     protocolo: String(row[COL_IX_PROTOCOLO] || "").trim(),
     nome: String(row[COL_IX_NOME] || "").trim(),
@@ -416,7 +418,7 @@ function gerarPayloadBackupListaInscritos() {
 }
 
 /**
- * Snapshot completo para backup automático: lista oficial + aba de pendentes Mercado Pago.
+ * Snapshot completo para backup automático: lista oficial + aba de pendentes.
  */
 function gerarPayloadBackupCompleto() {
   var ss = SpreadsheetApp.openById(ID_PLANILHA);
@@ -428,7 +430,7 @@ function gerarPayloadBackupCompleto() {
   var listaPend = listaBackupDaAba(pend);
   return {
     meta: {
-      descricao: "Backup automático: lista oficial + inscrições pendentes (Mercado Pago).",
+      descricao: "Backup automático: lista oficial + inscrições pendentes (Mercado Pago e presencial/PIX).",
       geradoEm: new Date().toISOString(),
       fonte: "Google Sheets",
       planilhaId: ID_PLANILHA,
@@ -591,7 +593,7 @@ function enviarEmailInscricaoRecebida(rowData) {
 
   var textoStatus = aguardandoMp
     ? "Sua inscrição foi recebida e está aguardando a aprovação do pagamento no Mercado Pago."
-    : "Sua inscrição foi recebida e registrada pela organização.";
+    : "Sua inscrição foi recebida e está pendente até a confirmação do pagamento pela organização.";
 
   var corpoTexto =
     "Olá" +
@@ -1121,6 +1123,82 @@ function montarMensagemLeigaAtualizacaoPagamento(out) {
   );
 }
 
+function obterSenhaAprovacaoConfigurada() {
+  var props = PropertiesService.getScriptProperties();
+  var senhaProp = String(props.getProperty("APROVACAO_SENHA") || "").trim();
+  if (senhaProp) return senhaProp;
+  return String(SENHA_MUDANCA_STATUS_PAGAMENTO || "").trim();
+}
+
+function validarAprovadorAutorizado() {
+  var props = PropertiesService.getScriptProperties();
+  var bruto = String(props.getProperty("APROVACAO_EMAILS") || "").trim();
+  /** Se não configurar APROVACAO_EMAILS, aprovação funciona só com senha. */
+  if (!bruto) return { ok: true };
+
+  var emailAtual = String(Session.getActiveUser().getEmail() || "")
+    .trim()
+    .toLowerCase();
+  if (!emailAtual) {
+    return { ok: false, error: "Nao foi possivel identificar o e-mail da conta que abriu o link." };
+  }
+
+  var lista = bruto
+    .split(/[;,]/)
+    .map(function (v) {
+      return String(v || "")
+        .trim()
+        .toLowerCase();
+    })
+    .filter(function (v) {
+      return !!v;
+    });
+
+  if (lista.indexOf(emailAtual) === -1) {
+    return { ok: false, error: "Conta sem permissao para aprovar pagamento.", email: emailAtual };
+  }
+  return { ok: true, email: emailAtual };
+}
+
+/**
+ * Corrige dados legados: move inscrições presenciais pendentes da lista oficial para a aba de pendentes.
+ * Útil quando a Web App antiga ainda gravou presencial na aba principal.
+ */
+function migrarPresenciaisPendentesParaAbaPendentes() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var main = obterAbaInscricoes(ss);
+  var pend = obterAbaPendentes(ss);
+  if (!main || !pend) return { ok: false, error: "Abas não encontradas." };
+  garantirCabecalhosPlanilha(main);
+  garantirCabecalhosPlanilha(pend);
+
+  var moved = 0;
+  var values = main.getDataRange().getValues();
+  var start = 0;
+  if (values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo") {
+    start = 1;
+  }
+
+  for (var i = values.length - 1; i >= start; i--) {
+    var row = values[i];
+    var forma = String(row[11] || "").toLowerCase();
+    var status = String(row[COL_IX_STATUS] || "").toLowerCase();
+    var protocolo = String(row[COL_IX_PROTOCOLO] || "").trim();
+    var ehPresencial = forma.indexOf("presencial") !== -1 || forma.indexOf("secretaria") !== -1;
+    var naoPago = classificarStatusPagamento(status) === "nao_pago";
+    if (!ehPresencial || !naoPago || !protocolo) continue;
+
+    if (encontrarLinhaPorProtocolo(pend, protocolo) < 0) {
+      pend.appendRow(row);
+    }
+    main.deleteRow(i + 1);
+    moved++;
+  }
+
+  if (moved > 0) sincronizarBackupSegurancaNoDrive();
+  return { ok: true, movidas: moved };
+}
+
 /**
  * Endpoint manual (GET /exec/{protocolo}/{senha}) para virar status de pagamento presencial.
  */
@@ -1130,8 +1208,16 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
   if (!p) {
     return { ok: false, error: "Informe o protocolo na URL." };
   }
-  if (!s || s !== SENHA_MUDANCA_STATUS_PAGAMENTO) {
+  var senhaEsperada = obterSenhaAprovacaoConfigurada();
+  if (!senhaEsperada) {
+    return { ok: false, error: "Senha de aprovacao nao configurada (APROVACAO_SENHA)." };
+  }
+  if (!s || s !== senhaEsperada) {
     return { ok: false, error: "Senha inválida." };
+  }
+  var autorizacao = validarAprovadorAutorizado();
+  if (!autorizacao.ok) {
+    return { ok: false, error: autorizacao.error };
   }
 
   var ss = SpreadsheetApp.openById(ID_PLANILHA);
