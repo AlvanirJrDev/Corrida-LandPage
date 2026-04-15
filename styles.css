@@ -1919,6 +1919,31 @@ a:hover {
   border-radius: var(--radius);
 }
 
+.inscricao-sucesso__pending {
+  margin: 0 0 1.1rem;
+  padding: 0.75rem 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  color: var(--color-blue);
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(30, 77, 110, 0.22);
+  border-radius: var(--radius);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.inscricao-sucesso__pending-spinner {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  border: 2px solid rgba(30, 77, 110, 0.22);
+  border-top-color: var(--color-blue);
+  border-radius: 50%;
+  animation: inscricao-spin 0.75s linear infinite;
+}
+
 /* Footer */
 .footer {
   padding: 2rem 0;

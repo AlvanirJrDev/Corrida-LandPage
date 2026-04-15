@@ -58,6 +58,7 @@
   var statusEl = document.getElementById("inscricao-status");
   var successPanel = document.getElementById("inscricao-sucesso");
   var webhookAviso = document.getElementById("webhook-aviso");
+  var confirmacaoPendenteTexto = document.getElementById("inscricao-confirmacao-pendente-texto");
   var btnWa = document.getElementById("btn-wa-comprovante");
   var protocoloEl = document.getElementById("protocolo-numero");
   var copyPixBtn = document.getElementById("btn-copy-pix");
@@ -123,8 +124,8 @@
     return "https://wa.me/" + num + "?text=" + encodeURIComponent(texto);
   }
 
-  function abrirWhatsAppPagamentoPresencial(dados, urlWa) {
-    if (!dados || dados.formaPagamentoCodigo !== "presencial_secretaria" || !urlWa) return;
+  function abrirWhatsAppAposInscricao(urlWa) {
+    if (!urlWa) return;
     var aba = window.open(urlWa, "_blank", "noopener,noreferrer");
     if (!aba && statusEl) {
       statusEl.hidden = false;
@@ -536,7 +537,12 @@
       }
     }
 
+    var msg = montarMensagemWhatsApp(dados);
+    var urlWa = urlWhatsApp(msg);
+    if (btnWa) btnWa.href = urlWa;
+
     if (result.checkoutUrl) {
+      abrirWhatsAppAposInscricao(urlWa);
       window.location.href = result.checkoutUrl;
       return;
     }
@@ -594,10 +600,16 @@
           sucessoTexto.innerHTML;
       }
     }
+    if (confirmacaoPendenteTexto) {
+      if (dados.formaPagamentoCodigo === "mercado_pago_online") {
+        confirmacaoPendenteTexto.textContent =
+          "Aguarde: sua inscrição será confirmada quando o pagamento online for aprovado.";
+      } else {
+        confirmacaoPendenteTexto.textContent =
+          "Aguarde: sua inscrição será confirmada após a equipe validar o pagamento.";
+      }
+    }
 
-    var msg = montarMensagemWhatsApp(dados);
-    var urlWa = urlWhatsApp(msg);
-    if (btnWa) btnWa.href = urlWa;
     if (protocoloEl) protocoloEl.textContent = protocolo;
 
     var headInsc = document.querySelector(".inscricao-head");
@@ -614,7 +626,7 @@
       successPanel.scrollIntoView({ behavior: "smooth", block: "start" });
       successPanel.focus();
     }
-    abrirWhatsAppPagamentoPresencial(dados, urlWa);
+    abrirWhatsAppAposInscricao(urlWa);
   });
 
   if (copyPixBtn) {
