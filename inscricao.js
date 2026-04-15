@@ -113,7 +113,7 @@
     if (dados.formaPagamentoCodigo === "mercado_pago_online") {
       linhas.push("Vou concluir o pagamento pelo Mercado Pago (PIX ou cartão). Se precisar, envio o comprovante em anexo.");
     } else {
-      linhas.push("Quero finalizar minha inscrição com pagamento presencial (dinheiro/PIX no local) e envio o comprovante em anexo.");
+      linhas.push("Quero finalizar minha inscrição. Peço que me enviem os dados do PIX por aqui para eu realizar o pagamento.");
     }
     return linhas.join("\n");
   }
@@ -131,8 +131,13 @@
       statusEl.hidden = false;
       statusEl.className = "form-status form-status--error";
       statusEl.textContent =
-        "Seu navegador bloqueou a abertura do WhatsApp. Toque no botão 'Enviar comprovante no WhatsApp' para continuar.";
+        "Seu navegador bloqueou a abertura do WhatsApp. Toque no botão 'Falar no WhatsApp da organização' para continuar.";
     }
+  }
+
+  function redirecionarDiretoParaWhatsApp(urlWa) {
+    if (!urlWa) return;
+    window.location.href = urlWa;
   }
 
   function apenasDigitos(str) {
@@ -285,7 +290,7 @@
           "Ao enviar, você será levado ao Mercado Pago para concluir com PIX ou cartão.";
       } else if (v === "presencial_secretaria") {
         passoFinal.textContent =
-          "Depois, abra o WhatsApp com a mensagem pronta e envie o comprovante.";
+          "Depois, abra o WhatsApp com a mensagem pronta. A equipe vai enviar os dados do PIX por lá.";
       } else {
         passoFinal.textContent =
           "Escolha no formulário como vai pagar — as instruções aparecem aqui em cima.";
@@ -589,10 +594,10 @@
     if (sucessoTexto) {
       if (dados.formaPagamentoCodigo === "mercado_pago_online") {
         sucessoTexto.innerHTML =
-          "Não foi possível abrir o checkout do Mercado Pago agora. Guarde o protocolo e <strong>envie o comprovante</strong> pelo WhatsApp — a mensagem já vem com seus dados. Você também pode pagar na secretaria.";
+          "Não foi possível abrir o checkout do Mercado Pago agora. Guarde o protocolo e fale no <strong>WhatsApp da organização</strong> — a mensagem já vem com seus dados. Você também pode pagar na secretaria.";
       } else {
         sucessoTexto.innerHTML =
-          "Guarde esse número. Agora envie o <strong>comprovante de pagamento</strong> pelo WhatsApp — a mensagem já vem com seus dados.";
+          "Guarde esse número. Agora fale no <strong>WhatsApp da organização</strong> — a mensagem já vem com seus dados para a equipe te enviar o PIX.";
       }
       if (trocouParaRegular) {
         sucessoTexto.innerHTML =
@@ -606,11 +611,24 @@
           "Aguarde: sua inscrição será confirmada quando o pagamento online for aprovado.";
       } else {
         confirmacaoPendenteTexto.textContent =
-          "Aguarde: sua inscrição será confirmada após a equipe validar o pagamento.";
+          "Aguarde: sua inscrição será confirmada após o contato da equipe no WhatsApp e validação do pagamento.";
       }
     }
 
     if (protocoloEl) protocoloEl.textContent = protocolo;
+
+    if (dados.formaPagamentoCodigo === "presencial_secretaria") {
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.className = "form-status";
+        statusEl.textContent = "Aguarde... abrindo WhatsApp para finalizar seu atendimento.";
+      }
+      setFormSubmitLoading(submitBtn, true);
+      setTimeout(function () {
+        redirecionarDiretoParaWhatsApp(urlWa);
+      }, 180);
+      return;
+    }
 
     var headInsc = document.querySelector(".inscricao-head");
     if (headInsc) headInsc.hidden = true;
