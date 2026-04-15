@@ -112,7 +112,7 @@
     if (dados.formaPagamentoCodigo === "mercado_pago_online") {
       linhas.push("Vou concluir o pagamento pelo Mercado Pago (PIX ou cartão). Se precisar, envio o comprovante em anexo.");
     } else {
-      linhas.push("Confirmo que realizei o pagamento (ou vou pagar na secretaria) e envio o comprovante em anexo.");
+      linhas.push("Quero finalizar minha inscrição com pagamento presencial (dinheiro/PIX no local) e envio o comprovante em anexo.");
     }
     return linhas.join("\n");
   }
@@ -121,6 +121,17 @@
     var num = (cfg.whatsappNumero || "").replace(/\D/g, "");
     if (!num) num = "5511999999999";
     return "https://wa.me/" + num + "?text=" + encodeURIComponent(texto);
+  }
+
+  function abrirWhatsAppPagamentoPresencial(dados, urlWa) {
+    if (!dados || dados.formaPagamentoCodigo !== "presencial_secretaria" || !urlWa) return;
+    var aba = window.open(urlWa, "_blank", "noopener,noreferrer");
+    if (!aba && statusEl) {
+      statusEl.hidden = false;
+      statusEl.className = "form-status form-status--error";
+      statusEl.textContent =
+        "Seu navegador bloqueou a abertura do WhatsApp. Toque no botão 'Enviar comprovante no WhatsApp' para continuar.";
+    }
   }
 
   function apenasDigitos(str) {
@@ -585,7 +596,8 @@
     }
 
     var msg = montarMensagemWhatsApp(dados);
-    if (btnWa) btnWa.href = urlWhatsApp(msg);
+    var urlWa = urlWhatsApp(msg);
+    if (btnWa) btnWa.href = urlWa;
     if (protocoloEl) protocoloEl.textContent = protocolo;
 
     var headInsc = document.querySelector(".inscricao-head");
@@ -602,6 +614,7 @@
       successPanel.scrollIntoView({ behavior: "smooth", block: "start" });
       successPanel.focus();
     }
+    abrirWhatsAppPagamentoPresencial(dados, urlWa);
   });
 
   if (copyPixBtn) {

@@ -34,6 +34,8 @@
  * ID da planilha (URL .../spreadsheets/d/ESTE_ID/edit)
  */
 var ID_PLANILHA = "1BLVaZLh3Dq64WvUoQ2_XhPXgDAB-uOkW0t-Gek9gaKc";
+/** Senha para endpoint manual de confirmação de pagamento presencial. */
+var SENHA_MUDANCA_STATUS_PAGAMENTO = "ejcecc@2026@corrida";
 
 /** Alinhe com config.js → nomeEvento (texto do e-mail de confirmação). */
 var NOME_EVENTO_EMAIL = "Corrida Mariana em prol do ECC e EJC de Sanharó";
@@ -1077,6 +1079,84 @@ function mensagemErroCheckoutMercadoPago(codigo) {
   return "Não foi possível gerar o link de pagamento no Mercado Pago.";
 }
 
+function respostaJson(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function respostaTexto(msg) {
+  return ContentService.createTextOutput(String(msg || "")).setMimeType(ContentService.MimeType.TEXT);
+}
+
+function montarMensagemLeigaAtualizacaoPagamento(out) {
+  if (!out || out.ok !== true) {
+    var erro = out && out.error ? String(out.error) : "Não foi possível atualizar agora.";
+    return (
+      "Nao foi possivel confirmar o pagamento.\n\n" +
+      "Motivo: " +
+      erro +
+      "\n\n" +
+      "Confira o protocolo e a senha e tente novamente. Se continuar, fale com a organizacao."
+    );
+  }
+  if (out.atualizado === false) {
+    return (
+      "Pagamento ja estava confirmado.\n\n" +
+      "Protocolo: " +
+      out.protocolo +
+      "\n" +
+      "Status atual: " +
+      (out.statusNovo || "Pago")
+    );
+  }
+  return (
+    "Pagamento confirmado com sucesso!\n\n" +
+    "Protocolo: " +
+    out.protocolo +
+    "\n" +
+    "Status anterior: " +
+    (out.statusAnterior || "—") +
+    "\n" +
+    "Novo status: " +
+    (out.statusNovo || "Pago")
+  );
+}
+
+/**
+ * Endpoint manual (GET /exec/{protocolo}/{senha}) para virar status de pagamento presencial.
+ */
+function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
+  var p = String(protocolo || "").trim();
+  var s = String(senha || "").trim();
+  if (!p) {
+    return { ok: false, error: "Informe o protocolo na URL." };
+  }
+  if (!s || s !== SENHA_MUDANCA_STATUS_PAGAMENTO) {
+    return { ok: false, error: "Senha inválida." };
+  }
+
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var main = obterAbaInscricoes(ss);
+  if (!main) {
+    return { ok: false, error: "Aba principal de inscrições não encontrada." };
+  }
+  garantirCabecalhosPlanilha(main);
+
+  var rowIndex = encontrarLinhaPorProtocolo(main, p);
+  if (rowIndex < 0) {
+    return { ok: false, error: "Protocolo não encontrado na lista principal.", protocolo: p };
+  }
+
+  var statusAtual = String(main.getRange(rowIndex, COL_IX_STATUS + 1).getValue() || "").trim();
+  if (classificarStatusPagamento(statusAtual) === "pago") {
+    return { ok: true, protocolo: p, statusAnterior: statusAtual, statusNovo: statusAtual, atualizado: false };
+  }
+
+  var novoStatus = "Pago (presencial confirmado)";
+  main.getRange(rowIndex, COL_IX_STATUS + 1).setValue(novoStatus);
+  sincronizarBackupSegurancaNoDrive();
+  return { ok: true, protocolo: p, statusAnterior: statusAtual || "—", statusNovo: novoStatus, atualizado: true };
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -1229,18 +1309,27 @@ function doPost(e) {
 }
 
 function doGet(e) {
+  var path = e && e.pathInfo != null ? String(e.pathInfo) : "";
+  path = path.replace(/^\/+|\/+$/g, "");
+  if (path) {
+    var parts = path.split("/");
+    if (parts.length === 2) {
+      var outManual = confirmarPagamentoPresencialPorProtocolo(parts[0], parts[1]);
+      return respostaTexto(montarMensagemLeigaAtualizacaoPagamento(outManual));
+    }
+  }
+
   if (e && e.parameter && e.parameter.backup === "1") {
     var keyEsperada = PropertiesService.getScriptProperties().getProperty("BACKUP_JSON_KEY");
     var keyRecebida = e.parameter.key != null ? String(e.parameter.key) : "";
     if (!keyEsperada || keyRecebida !== keyEsperada) {
-      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "Não autorizado. Defina BACKUP_JSON_KEY nas Propriedades do script e use ?backup=1&key=..." }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return respostaJson({ ok: false, error: "Não autorizado. Defina BACKUP_JSON_KEY nas Propriedades do script e use ?backup=1&key=..." });
     }
     try {
       var payloadBackup = gerarPayloadBackupListaInscritos();
-      return ContentService.createTextOutput(JSON.stringify(payloadBackup, null, 2)).setMimeType(ContentService.MimeType.JSON);
+      return respostaJson(payloadBackup);
     } catch (errBackup) {
-      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(errBackup) })).setMimeType(ContentService.MimeType.JSON);
+      return respostaJson({ ok: false, error: String(errBackup) });
     }
   }
 
