@@ -17,7 +17,7 @@
  * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca por e-mail + telefone (só dígitos) na lista oficial e em Inscrições pendentes MP.
  *
  * Duplicata + Mercado Pago: se o POST vier com mercadoPago: true, linhas não pagas com o mesmo e-mail ou telefone
- * (status "Aguardando pagamento online" ou "Pendente (presencial)") são removidas antes da checagem de duplicata,
+ * (status "Aguardando pagamento online" ou "Pendente (PIX via WhatsApp)") são removidas antes da checagem de duplicata,
  * para o inscrito poder gerar um novo checkout. Inscrição já paga (ex.: "Pago (Mercado Pago)") continua bloqueando.
  *
  * Backup JSON (lista oficial): defina BACKUP_JSON_KEY nas Propriedades do script. GET:
@@ -567,6 +567,10 @@ function escapeHtmlEmail(s) {
  * Para online, informa que está aguardando aprovação do pagamento.
  */
 function enviarEmailInscricaoRecebida(rowData) {
+  if (!rowData || !rowData.length) {
+    Logger.log("enviarEmailInscricaoRecebida: rowData indefinido/vazio");
+    return;
+  }
   var email = String(rowData[COL_IX_EMAIL] || "").trim();
   if (!email || email.indexOf("@") < 0) return;
   var nome = String(rowData[COL_IX_NOME] || "").trim();
@@ -708,6 +712,13 @@ function enviarEmailInscricaoRecebida(rowData) {
  * 1ª vez: o Apps Script pedirá permissão para enviar e-mail. Limite diário do Gmail se aplicam.
  */
 function enviarEmailPagamentoConfirmado(rowData) {
+  if (!rowData || !rowData.length) {
+    Logger.log("enviarEmailPagamentoConfirmado: rowData indefinido/vazio");
+    return;
+  }
+  while (rowData.length < CABECALHOS.length) {
+    rowData.push("");
+  }
   var email = String(rowData[COL_IX_EMAIL] || "").trim();
   var nome = String(rowData[COL_IX_NOME] || "").trim();
   var proto = String(rowData[COL_IX_PROTOCOLO] || "").trim();
@@ -885,6 +896,25 @@ function enviarEmailPagamentoConfirmado(rowData) {
   }
 }
 
+/**
+ * Teste manual: envia e-mail de confirmação usando a última linha da aba principal.
+ * Execute esta função no editor Apps Script para validar template e permissões do MailApp.
+ */
+function testeEnvioEmailPagamentoConfirmado() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var main = obterAbaInscricoes(ss);
+  if (!main) throw new Error("Aba principal não encontrada.");
+  garantirCabecalhosPlanilha(main);
+
+  var lastRow = main.getLastRow();
+  if (lastRow < 2) {
+    throw new Error("Sem inscrições na aba principal para testar o envio de e-mail.");
+  }
+
+  var rowData = main.getRange(lastRow, 1, 1, CABECALHOS.length).getValues()[0];
+  enviarEmailPagamentoConfirmado(rowData);
+}
+
 function obterPagamentoMercadoPago(paymentId) {
   var props = PropertiesService.getScriptProperties();
   var token = props.getProperty("MERCADO_PAGO_ACCESS_TOKEN");
@@ -933,7 +963,7 @@ function processarNotificacaoPagamentoMercadoPago(paymentId) {
   if (!main) return;
   garantirCabecalhosPlanilha(main);
 
-  var rowData = pend.getRange(rowIndex, 1, rowIndex, CABECALHOS.length).getValues()[0];
+  var rowData = pend.getRange(rowIndex, 1, 1, CABECALHOS.length).getValues()[0];
   while (rowData.length < CABECALHOS.length) {
     rowData.push("");
   }
@@ -1184,7 +1214,11 @@ function migrarPresenciaisPendentesParaAbaPendentes() {
     var forma = String(row[11] || "").toLowerCase();
     var status = String(row[COL_IX_STATUS] || "").toLowerCase();
     var protocolo = String(row[COL_IX_PROTOCOLO] || "").trim();
-    var ehPresencial = forma.indexOf("presencial") !== -1 || forma.indexOf("secretaria") !== -1;
+    var ehPresencial =
+      forma.indexOf("presencial") !== -1 ||
+      forma.indexOf("secretaria") !== -1 ||
+      forma.indexOf("pix") !== -1 ||
+      forma.indexOf("whatsapp") !== -1;
     var naoPago = classificarStatusPagamento(status) === "nao_pago";
     if (!ehPresencial || !naoPago || !protocolo) continue;
 
@@ -1237,6 +1271,8 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
     }
     var novoStatusMain = "Pago (presencial confirmado)";
     main.getRange(rowMain, COL_IX_STATUS + 1).setValue(novoStatusMain);
+    var rowMainData = main.getRange(rowMain, 1, 1, CABECALHOS.length).getValues()[0];
+    enviarEmailPagamentoConfirmado(rowMainData);
     sincronizarBackupSegurancaNoDrive();
     return { ok: true, protocolo: p, statusAnterior: statusMain || "—", statusNovo: novoStatusMain, atualizado: true };
   }
@@ -1256,6 +1292,7 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
 
   if (!jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
     main.appendRow(rowData);
+    enviarEmailPagamentoConfirmado(rowData);
   }
   pend.deleteRow(rowPend);
   sincronizarBackupSegurancaNoDrive();
@@ -1393,7 +1430,7 @@ function doPost(e) {
         out.erroCheckout = mensagemErroCheckoutMercadoPago(mpRes.erroCodigo);
       }
     } else {
-      var row = montarLinhaInscricao(data, "Pendente (presencial)");
+      var row = montarLinhaInscricao(data, "Pendente (PIX via WhatsApp)");
       var pendPresencial = obterAbaPendentes(ss);
       garantirCabecalhosPlanilha(pendPresencial);
       pendPresencial.appendRow(row);

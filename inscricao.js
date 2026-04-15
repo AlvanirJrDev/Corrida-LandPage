@@ -155,7 +155,7 @@
 
   function labelFormaPagamento(codigo) {
     if (codigo === "mercado_pago_online") return "Mercado Pago (PIX ou cartão online)";
-    if (codigo === "presencial_secretaria") return "Presencial na secretaria";
+    if (codigo === "presencial_secretaria") return "PIX via WhatsApp";
     return String(codigo || "").trim() || "—";
   }
 
