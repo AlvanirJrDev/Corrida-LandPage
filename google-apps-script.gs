@@ -17,9 +17,11 @@
  * Produção MP: (1) token de produção em MERCADO_PAGO_ACCESS_TOKEN, (2) config.js com useSandbox: false e urlRetorno HTTPS real,
  * (3) Implantar → Gerenciar implantações → Nova versão na Web App.
  *
- * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca por e-mail + telefone (só dígitos) na lista oficial e em todas as abas de fila pendentes (nomes em NOMES_RESERVADOS_ABA_PENDENTES).
+ * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca na lista oficial e em abas de pendentes (nomes reservados) e em qualquer outra aba que tenha o cabeçalho padrão (linha 1, coluna "Protocolo").
  *
- * PIX via WhatsApp (presencial): a linha fica na fila de pendentes até aprovar. GET /exec?protocolo=…&senha=… (ou /exec/PROTO/SENHA) procura o protocolo na lista oficial e em todas essas abas; ao aprovar, move para a lista oficial, status "Pago (presencial confirmado)" e envia e-mail de confirmação (MailApp autorizado).
+ * PIX via WhatsApp (presencial): a linha fica na fila de pendentes até aprovar. GET /exec?protocolo=…&senha=… (ou /exec/PROTO/SENHA) procura o protocolo na lista oficial e em todas as abas com formato de inscrição (inclui abas com nome fora da lista, ex.: "Fila PIX"). Ao aprovar, move para a lista oficial, status "Pago (presencial confirmado)" e envia e-mail. Na linha pendente é gravada a coluna "Link aprovar PIX" (HYPERLINK) usando WEB_APP_URL ou WEB_APP_URL_FALLBACK — defina WEB_APP_URL igual à URL /exec desta implantação.
+ *
+ * Limites de lote (camisas): contam só inscrições com status de pagamento confirmado (texto com "Pago" — ex.: Pago (Mercado Pago), Pago (presencial confirmado)). Pendências e "Aguardando pagamento online" não consomem vaga do lote. Exige coluna Protocolo preenchida.
  *
  * Duplicata + Mercado Pago: se o POST vier com mercadoPago: true, linhas não pagas com o mesmo e-mail ou telefone
  * (status "Aguardando pagamento online" ou "Pendente (PIX via WhatsApp)") são removidas antes da checagem de duplicata,
@@ -74,7 +76,14 @@ var WEB_APP_URL_FALLBACK =
 /** Aba de fila: Mercado Pago e presencial/PIX. O script também reconhece nomes alternativos (ver obterAbaPendentes). */
 var NOME_ABA_PENDENTES = "Inscrições pendentes MP";
 /** Nomes de aba que são só fila de pendentes — nunca usar como lista oficial (fallback sheets[0]). */
-var NOMES_RESERVADOS_ABA_PENDENTES = ["Inscrições pendentes MP", "Pendentes", "Inscrições pendentes", "Pendências"];
+var NOMES_RESERVADOS_ABA_PENDENTES = [
+  "Inscrições pendentes MP",
+  "Pendentes",
+  "Inscrições pendentes",
+  "Pendências",
+  "Fila PIX",
+  "PIX pendentes",
+];
 
 /** Limites de lotes: alinhar com config.js */
 var LIMITE_LOTE_PROMO = 50;
@@ -90,6 +99,10 @@ var COL_IX_EMAIL = 3;
 var COL_IX_TELEFONE = 4;
 var COL_IX_PROTOCOLO = 1;
 var COL_IX_NOME = 2;
+/** Coluna "Status pagamento" (0-based), alinhado a CABECALHOS */
+var COL_IX_STATUS = 12;
+/** Coluna com fórmula HYPERLINK para aprovação GET (PIX pendente). */
+var COL_IX_LINK_APROVACAO = 13;
 
 var CABECALHOS = [
   "Data",
@@ -105,6 +118,7 @@ var CABECALHOS = [
   "Valor (R$)",
   "Forma pagamento",
   "Status pagamento",
+  "Link aprovar PIX",
 ];
 
 /** Chaves do objeto em cada linha do backup JSON (mesma ordem que CABECALHOS). */
@@ -122,6 +136,7 @@ var CHAVES_JSON_INSCRICAO = [
   "valorReais",
   "formaPagamento",
   "statusPagamento",
+  "linkAprovarPix",
 ];
 
 function soDigitos(s) {
@@ -155,11 +170,13 @@ function jaTemCadastro(sheet, email, telDigits) {
 }
 
 function jaTemCadastroQualquerAba(ss, email, telDigits) {
-  var m = jaTemCadastro(obterAbaInscricoes(ss), email, telDigits);
+  var mainJ = obterAbaInscricoes(ss);
+  var m = jaTemCadastro(mainJ, email, telDigits);
   if (m) return m;
-  var listaPend = listarAbasPorNomesPendentes(ss);
+  var listaPend = listarAbasParaBuscaInscricao(ss);
   for (var i = 0; i < listaPend.length; i++) {
     var pend = listaPend[i];
+    if (mainJ && pend.getSheetId() === mainJ.getSheetId()) continue;
     if (pend.getLastRow() === 0) continue;
     garantirCabecalhosPlanilha(pend);
     var r = jaTemCadastro(pend, email, telDigits);
@@ -213,21 +230,28 @@ function removerInscricoesNaoPagasParaNovoCheckoutMp(ss, email, telDigits) {
       sh.deleteRow(i + 1);
     }
   }
-  var listaPendPurge = listarAbasPorNomesPendentes(ss);
+  var mainPurge = obterAbaInscricoes(ss);
+  var listaPendPurge = listarAbasParaBuscaInscricao(ss);
   for (var pi = 0; pi < listaPendPurge.length; pi++) {
-    purgeSheet(listaPendPurge[pi]);
+    var shP = listaPendPurge[pi];
+    if (mainPurge && shP.getSheetId() === mainPurge.getSheetId()) continue;
+    purgeSheet(shP);
   }
-  purgeSheet(obterAbaInscricoes(ss));
+  purgeSheet(mainPurge);
 }
 
+/** Quantas vagas do lote já foram efetivamente pagas (para limites de camisas / promo vs regular). */
 function contarInscricoesLote(sheet, loteId) {
   var values = sheet.getDataRange().getValues();
   var start = 0;
-  if (values.length > 0 && String(values[0][1]) === "Protocolo") {
+  if (values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo") {
     start = 1;
   }
   var n = 0;
   for (var i = start; i < values.length; i++) {
+    var proto = String(values[i][COL_IX_PROTOCOLO] || "").trim();
+    if (!proto) continue;
+    if (classificarStatusPagamento(values[i][COL_IX_STATUS]) !== "pago") continue;
     if (String(values[i][COL_IX_LOTE]).trim() === String(loteId)) {
       n++;
     }
@@ -236,10 +260,12 @@ function contarInscricoesLote(sheet, loteId) {
 }
 
 function contarInscricoesLoteTotal(ss, loteId) {
-  var n = contarInscricoesLote(obterAbaInscricoes(ss), loteId);
-  var listaPendLote = listarAbasPorNomesPendentes(ss);
-  for (var li = 0; li < listaPendLote.length; li++) {
-    var pend = listaPendLote[li];
+  var main = obterAbaInscricoes(ss);
+  var n = contarInscricoesLote(main, loteId);
+  var listaTodas = listarAbasParaBuscaInscricao(ss);
+  for (var li = 0; li < listaTodas.length; li++) {
+    var pend = listaTodas[li];
+    if (main && pend.getSheetId() === main.getSheetId()) continue;
     if (pend.getLastRow() > 0) {
       garantirCabecalhosPlanilha(pend);
       n += contarInscricoesLote(pend, loteId);
@@ -329,17 +355,47 @@ function obterAbaPendentes(ss) {
   return candidates[0];
 }
 
-/** Retorna { sheet, rowIndex } ou null se o protocolo não estiver em nenhuma aba de pendentes conhecida. */
+/** Linha 1 tem "Protocolo" na coluna certa — mesma estrutura da lista de inscrições. */
+function sheetTemCabecalhoInscricao(sh) {
+  if (!sh || sh.getLastRow() < 1) return false;
+  var v = String(sh.getRange(1, COL_IX_PROTOCOLO + 1).getValue() || "").trim();
+  return v === "Protocolo";
+}
+
+/**
+ * Pendentes: abas com nomes reservados primeiro; depois qualquer outra aba (exceto lista oficial) com cabeçalho de inscrição.
+ * Evita "Protocolo não encontrado" quando a fila está em aba com nome personalizado.
+ */
 function encontrarProtocoloNasAbasPendentes(ss, protocolo) {
   if (ss == null || typeof ss.getSheetByName !== "function") {
     throw new Error("encontrarProtocoloNasAbasPendentes: planilha (ss) inválida ou não informada.");
   }
-  var lista = listarAbasPorNomesPendentes(ss);
+  var main = obterAbaInscricoes(ss);
   var p = String(protocolo || "").trim();
-  for (var i = 0; i < lista.length; i++) {
-    garantirCabecalhosPlanilha(lista[i]);
-    var r = encontrarLinhaPorProtocolo(lista[i], p);
-    if (r > 0) return { sheet: lista[i], rowIndex: r };
+  if (!p) return null;
+
+  var listaNomeada = listarAbasPorNomesPendentes(ss);
+  var seen = {};
+  var i;
+  var sh;
+  var r;
+  for (i = 0; i < listaNomeada.length; i++) {
+    sh = listaNomeada[i];
+    seen[sh.getSheetId()] = true;
+    garantirCabecalhosPlanilha(sh);
+    r = encontrarLinhaPorProtocolo(sh, p);
+    if (r > 0) return { sheet: sh, rowIndex: r };
+  }
+
+  var todas = ss.getSheets();
+  for (i = 0; i < todas.length; i++) {
+    sh = todas[i];
+    if (main && sh.getSheetId() === main.getSheetId()) continue;
+    if (seen[sh.getSheetId()]) continue;
+    if (!sheetTemCabecalhoInscricao(sh)) continue;
+    garantirCabecalhosPlanilha(sh);
+    r = encontrarLinhaPorProtocolo(sh, p);
+    if (r > 0) return { sheet: sh, rowIndex: r };
   }
   return null;
 }
@@ -363,7 +419,10 @@ function garantirCabecalhosPlanilha(sheet) {
   if (sheet.getLastRow() > 0) {
     var lc = sheet.getLastColumn();
     if (lc < CABECALHOS.length) {
-      sheet.getRange(1, CABECALHOS.length).setValue(CABECALHOS[CABECALHOS.length - 1]);
+      for (var c = lc; c < CABECALHOS.length; c++) {
+        sheet.getRange(1, c + 1).setValue(CABECALHOS[c]);
+      }
+      sheet.getRange(1, 1, 1, CABECALHOS.length).setFontWeight("bold");
     }
     return;
   }
@@ -387,7 +446,33 @@ function montarLinhaInscricao(data, statusPagamento) {
     data.valorReais !== undefined && data.valorReais !== null ? data.valorReais : "",
     data.formaPagamento || "",
     statusPagamento || "Pendente",
+    "",
   ];
+}
+
+/** URL do GET de aprovação PIX/presencial (mesma Web App que recebe o POST de inscrição). */
+function montarUrlAprovacaoPagamentoPix(protocolo) {
+  var props = PropertiesService.getScriptProperties();
+  var base = String(props.getProperty("WEB_APP_URL") || WEB_APP_URL_FALLBACK || "")
+    .trim()
+    .replace(/\?.*$/, "")
+    .replace(/\/+$/, "");
+  if (!base) return "";
+  var senha = obterSenhaAprovacaoConfigurada();
+  if (!senha) return "";
+  var p = String(protocolo || "").trim();
+  if (!p) return "";
+  return base + "?protocolo=" + encodeURIComponent(p) + "&senha=" + encodeURIComponent(senha);
+}
+
+/** Grava HYPERLINK na coluna "Link aprovar PIX" (só fila de pendentes). */
+function aplicarHyperlinkAprovacaoPixNaLinha(sheet, rowIndex, protocolo) {
+  if (!sheet || rowIndex < 2) return;
+  var url = montarUrlAprovacaoPagamentoPix(protocolo);
+  if (!url) return;
+  garantirCabecalhosPlanilha(sheet);
+  var esc = url.replace(/"/g, '""');
+  sheet.getRange(rowIndex, COL_IX_LINK_APROVACAO + 1).setFormula('=HYPERLINK("' + esc + '";"Aprovar PIX")');
 }
 
 function encontrarLinhaPorProtocolo(sheet, protocolo) {
@@ -405,11 +490,37 @@ function encontrarLinhaPorProtocolo(sheet, protocolo) {
   return -1;
 }
 
-/** Índice coluna "Status pagamento" (0-based), alinhado a CABECALHOS */
-var COL_IX_STATUS = 12;
+/** Ordem: lista oficial → abas com nome de pendentes → outras abas com cabeçalho de inscrição (ex.: fila PIX). */
+function listarAbasParaBuscaInscricao(ss) {
+  var main = obterAbaInscricoes(ss);
+  var ordered = [];
+  var seen = {};
+  var i;
+  var sh;
+  if (main) {
+    ordered.push(main);
+    seen[main.getSheetId()] = true;
+  }
+  var nomeadas = listarAbasPorNomesPendentes(ss);
+  for (i = 0; i < nomeadas.length; i++) {
+    sh = nomeadas[i];
+    if (seen[sh.getSheetId()]) continue;
+    ordered.push(sh);
+    seen[sh.getSheetId()] = true;
+  }
+  var todas = ss.getSheets();
+  for (i = 0; i < todas.length; i++) {
+    sh = todas[i];
+    if (seen[sh.getSheetId()]) continue;
+    if (!sheetTemCabecalhoInscricao(sh)) continue;
+    ordered.push(sh);
+    seen[sh.getSheetId()] = true;
+  }
+  return ordered;
+}
 
 /**
- * Busca inscrição na lista principal ou em pendentes MP — exige e-mail + telefone (mesmos da inscrição; telefone comparado só com dígitos).
+ * Busca inscrição na lista principal ou em pendentes — exige e-mail + telefone (mesmos da inscrição; telefone comparado só com dígitos).
  */
 function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
   var em = String(email || "")
@@ -419,13 +530,7 @@ function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
   if (!em || td.length < 10) return null;
 
   var mainB = obterAbaInscricoes(ss);
-  var listaPB = listarAbasPorNomesPendentes(ss);
-  var alvo = [mainB];
-  var nomes = ["lista_oficial"];
-  for (var pb = 0; pb < listaPB.length; pb++) {
-    alvo.push(listaPB[pb]);
-    nomes.push("pendente_fila");
-  }
+  var alvo = listarAbasParaBuscaInscricao(ss);
   for (var s = 0; s < alvo.length; s++) {
     var sheet = alvo[s];
     if (!sheet || sheet.getLastRow() === 0) continue;
@@ -439,7 +544,8 @@ function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
       var row = values[i];
       if (String(row[COL_IX_EMAIL]).trim().toLowerCase() !== em) continue;
       if (!telefonesIguaisBR(row[COL_IX_TELEFONE], td)) continue;
-      return { row: row, origem: nomes[s] };
+      var origem = mainB && sheet.getSheetId() === mainB.getSheetId() ? "lista_oficial" : "pendente_fila";
+      return { row: row, origem: origem };
     }
   }
   return null;
@@ -561,10 +667,12 @@ function gerarPayloadBackupCompleto() {
   garantirCabecalhosPlanilha(sheet);
   var listaOficial = listaBackupDaAba(sheet);
   var listaPend = [];
-  var shPendBackup = listarAbasPorNomesPendentes(ss);
+  var shPendBackup = listarAbasParaBuscaInscricao(ss);
   for (var bi = 0; bi < shPendBackup.length; bi++) {
-    garantirCabecalhosPlanilha(shPendBackup[bi]);
-    var trecho = listaBackupDaAba(shPendBackup[bi]);
+    var shBk = shPendBackup[bi];
+    if (sheet && shBk.getSheetId() === sheet.getSheetId()) continue;
+    garantirCabecalhosPlanilha(shBk);
+    var trecho = listaBackupDaAba(shBk);
     for (var bj = 0; bj < trecho.length; bj++) listaPend.push(trecho[bj]);
   }
   return {
@@ -887,13 +995,13 @@ function detalheConfirmacaoPagamentoParaTemplate(rowData, payJson) {
     var ptId = String(payJson.payment_type_id || "").toLowerCase();
     if (pmId === "pix") {
       return {
-        chipLabel: "PIX",
-        chipCor: "#00b1a5",
+        chipLabel: "Mercado Pago",
+        chipCor: "#009ee3",
         txt:
-          "Meio: PIX (Mercado Pago).\n\n" +
-          "Seu pagamento via PIX pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
+          "Meio: pagamento online (Mercado Pago).\n\n" +
+          "Seu pagamento pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
         fraseHtml:
-          "Identificamos e <strong>aprovamos</strong> seu pagamento via <strong>PIX</strong> pelo Mercado Pago. Sua vaga está <strong>garantida</strong> na lista oficial.",
+          "Seu pagamento pelo <strong>Mercado Pago</strong> foi <strong>confirmado</strong>. Sua vaga está <strong>garantida</strong> na lista oficial.",
       };
     }
     if (ptId === "credit_card") {
@@ -961,7 +1069,7 @@ function detalheConfirmacaoPagamentoParaTemplate(rowData, payJson) {
 
 /**
  * Envia e-mail ao inscrito quando o pagamento MP é confirmado (webhook).
- * payJsonOpcional: objeto do pagamento MP (GET /v1/payments) para personalizar PIX vs cartão etc.
+ * payJsonOpcional: objeto do pagamento MP (GET /v1/payments) para personalizar meio (cartão, boleto, etc.).
  * 1ª vez: o Apps Script pedirá permissão para enviar e-mail. Limite diário do Gmail se aplicam.
  */
 function enviarEmailPagamentoConfirmado(rowData, payJsonOpcional) {
@@ -1247,7 +1355,8 @@ function processarNotificacaoPagamentoMercadoPago(paymentId) {
   while (rowData.length < CABECALHOS.length) {
     rowData.push("");
   }
-  rowData[CABECALHOS.length - 1] = "Pago (Mercado Pago)";
+  rowData[COL_IX_STATUS] = "Pago (Mercado Pago)";
+  rowData[COL_IX_LINK_APROVACAO] = "";
 
   if (jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
     pend.deleteRow(rowIndex);
@@ -1304,7 +1413,7 @@ function criarPreferenciaMercadoPago(data) {
       email: String(data.email || "").trim(),
     },
     external_reference: String(data.protocolo || ""),
-    /** Não exclui tipos/meios — no BR o checkout pode oferecer PIX, cartão, boleto etc. conforme a conta MP. */
+    /** Não exclui tipos/meios — o checkout segue o que a conta MP oferece (cartão, boleto, etc.). */
     payment_methods: {
       excluded_payment_types: [],
       excluded_payment_methods: [],
@@ -1569,6 +1678,7 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
   var statusPend = String(rowData[COL_IX_STATUS] || "").trim();
   var novoStatus = "Pago (presencial confirmado)";
   rowData[COL_IX_STATUS] = novoStatus;
+  rowData[COL_IX_LINK_APROVACAO] = "";
 
   if (!jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
     main.appendRow(rowData);
@@ -1742,6 +1852,7 @@ function doPost(e) {
       var row = montarLinhaInscricao(data, "Pendente (PIX via WhatsApp)");
       var pendPresencial = abaPendInscricao;
       pendPresencial.appendRow(row);
+      aplicarHyperlinkAprovacaoPixNaLinha(pendPresencial, pendPresencial.getLastRow(), data.protocolo);
       sincronizarBackupSegurancaNoDrive();
       enviarEmailInscricaoRecebida(row);
     }
@@ -1760,9 +1871,31 @@ function doPost(e) {
   }
 }
 
+function normalizarParametroUrlGet_(valor) {
+  var s = String(valor != null ? valor : "").trim();
+  if (!s) return "";
+  try {
+    return decodeURIComponent(s.replace(/\+/g, " "));
+  } catch (err1) {
+    return s;
+  }
+}
+
+function obterParametroGet_(e, chaves) {
+  if (!e || !e.parameter) return "";
+  var p = e.parameter;
+  for (var i = 0; i < chaves.length; i++) {
+    var k = chaves[i];
+    if (p[k] == null) continue;
+    var v = normalizarParametroUrlGet_(p[k]);
+    if (v) return v;
+  }
+  return "";
+}
+
 function doGet(e) {
-  var protocoloQs = e && e.parameter && e.parameter.protocolo ? String(e.parameter.protocolo) : "";
-  var senhaQs = e && e.parameter && e.parameter.senha ? String(e.parameter.senha) : "";
+  var protocoloQs = obterParametroGet_(e, ["protocolo", "Protocolo", "PROTOCOLO"]);
+  var senhaQs = obterParametroGet_(e, ["senha", "Senha", "SENHA", "password"]);
   if (protocoloQs && senhaQs) {
     var outManualQs = confirmarPagamentoPresencialPorProtocolo(protocoloQs, senhaQs);
     return respostaTexto(montarMensagemLeigaAtualizacaoPagamento(outManualQs));
@@ -1773,7 +1906,10 @@ function doGet(e) {
   if (path) {
     var parts = path.split("/");
     if (parts.length === 2) {
-      var outManual = confirmarPagamentoPresencialPorProtocolo(parts[0], parts[1]);
+      var outManual = confirmarPagamentoPresencialPorProtocolo(
+        normalizarParametroUrlGet_(parts[0]),
+        normalizarParametroUrlGet_(parts[1])
+      );
       return respostaTexto(montarMensagemLeigaAtualizacaoPagamento(outManual));
     }
   }

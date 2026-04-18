@@ -6,7 +6,7 @@
  * Coluna "Status pagamento": deixe "Pendente" e altere manualmente para "Pago" ao confirmar PIX/dinheiro.
  *
  * Mercado Pago: com mercadoPago.ativo = true, o formulário exibe "Mercado Pago" como opção e,
- * só se o inscrito escolher pagamento online, o Apps Script cria o checkout (PIX/cartão).
+ * só se o inscrito escolher pagamento online, o Apps Script cria o checkout no Mercado Pago.
  * Configure MERCADO_PAGO_ACCESS_TOKEN no projeto (veja google-apps-script.gs).
  *
  * Planilha (Drive): só compartilhe com quem for organizador. "Pode editar" = pode ver todos os

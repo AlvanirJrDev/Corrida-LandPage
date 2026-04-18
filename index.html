@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Corrida Mariana em maio (mês mariano) — 31 de maio de 2026, Sanharó. Percursos de 3 km e 5 km em prol do ECC e do EJC. Kit com camisa oficial, café da manhã e medalha." />
   <title>Corrida Mariana — ECC e EJC · Sanharó</title>
+  <link rel="icon" href="assets/logo-corrida-mariana-favicon.png" type="image/png" sizes="any" />
+  <link rel="apple-touch-icon" href="assets/logo-corrida-mariana-favicon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,600&family=Racing+Sans+One&display=swap" rel="stylesheet" />
@@ -25,7 +27,17 @@
   </div>
   <header class="hero" id="topo">
     <nav class="nav" aria-label="Principal">
-      <a class="nav__brand" href="#topo">Corrida Mariana</a>
+      <a class="nav__brand" href="#topo">
+        <img
+          class="nav__brand-logo"
+          src="assets/logo-corrida-mariana-favicon.png"
+          alt=""
+          width="40"
+          height="40"
+          decoding="async"
+        />
+        <span class="nav__brand-text">Corrida Mariana</span>
+      </a>
       <ul class="nav__links">
         <li><a href="#sobre">Evento</a></li>
         <li><a href="#distancias">Percurso</a></li>
@@ -568,7 +580,7 @@
                   <span class="form-field__label">Como deseja pagar? *</span>
                   <select name="forma_pagamento" id="select-forma-pagamento" required>
                     <option value="" disabled selected>Escolha uma opção</option>
-                    <option value="mercado_pago_online">Mercado Pago — PIX ou cartão (pagamento online)</option>
+                    <option value="mercado_pago_online">Mercado Pago — pagamento online</option>
                     <option value="presencial_secretaria">PIX via WhatsApp (falar com a organização)</option>
                   </select>
                   <span class="form-field__hint" id="forma-pagamento-hint"></span>
@@ -600,7 +612,7 @@
               <div id="aside-bloco-online" class="aside-pagamento-bloco aside-pagamento-bloco--online" hidden>
                 <p class="aside-pagamento-bloco__titulo">Pagamento online</p>
                 <p class="aside-pagamento-bloco__texto">
-                  Ao enviar o formulário, você será redirecionado ao <strong>Mercado Pago</strong> (PIX ou cartão). Sua inscrição fica <strong>pendente</strong> até a aprovação; depois entra na lista oficial.
+                  Ao enviar o formulário, você será redirecionado ao <strong>Mercado Pago</strong> para concluir o pagamento com os meios disponíveis na página deles. Sua inscrição fica <strong>pendente</strong> até a aprovação; depois entra na lista oficial.
                 </p>
               </div>
 

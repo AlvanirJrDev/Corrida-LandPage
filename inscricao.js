@@ -111,7 +111,7 @@
       "",
     ];
     if (dados.formaPagamentoCodigo === "mercado_pago_online") {
-      linhas.push("Vou concluir o pagamento pelo Mercado Pago (PIX ou cartão). Se precisar, envio o comprovante em anexo.");
+      linhas.push("Vou concluir o pagamento pelo Mercado Pago (pagamento online). Se precisar, envio o comprovante em anexo.");
     } else {
       linhas.push("Quero finalizar minha inscrição. Peço que me enviem os dados do PIX por aqui para eu realizar o pagamento.");
     }
@@ -154,7 +154,7 @@
   }
 
   function labelFormaPagamento(codigo) {
-    if (codigo === "mercado_pago_online") return "Mercado Pago (PIX ou cartão online)";
+    if (codigo === "mercado_pago_online") return "Mercado Pago (pagamento online)";
     if (codigo === "presencial_secretaria") return "PIX via WhatsApp";
     return String(codigo || "").trim() || "—";
   }
@@ -287,7 +287,7 @@
     if (passoFinal) {
       if (v === "mercado_pago_online" && mpOk) {
         passoFinal.textContent =
-          "Ao enviar, você será levado ao Mercado Pago para concluir com PIX ou cartão.";
+          "Ao enviar, você será levado ao Mercado Pago para concluir o pagamento online.";
       } else if (v === "presencial_secretaria") {
         passoFinal.textContent =
           "Depois, abra o WhatsApp com a mensagem pronta. A equipe vai enviar os dados do PIX por lá.";
