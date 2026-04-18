@@ -83,6 +83,98 @@
     });
   }
 
+  /** Remove da dica frases com quantidade/vagas (ex.: "Máximo 50…", "até N inscrições") mesmo de config antigo. */
+  function sanitizarDescricaoLote(s) {
+    if (!s) return "";
+    var t = String(s);
+    t = t.replace(/\s*M[aá]ximo\s*(?:de\s*)?\d+[^.!?\n]*/gi, "");
+    t = t.replace(/[^.!?\n]*\d+\s*(?:vagas?|inscri[cç][oô]es?)[^.!?\n]*[.!?]?/gi, "");
+    t = t.replace(/\s*(?:até|no\s*m[aá]ximo)\s*\d+[^.!?\n]*/gi, "");
+    t = t.replace(/\s*\d+\s*inscri[cç][oô]es?\s+[^.!?\n]*/gi, "");
+    t = t.replace(/\s*neste\s+lote\.?/gi, "");
+    t = t.replace(/\(\s*\d+\s*(?:vagas?|inscri[cç][oô]es?)\s*\)/gi, "");
+    t = t.replace(/\s{2,}/g, " ").replace(/\s+([.!?])/g, "$1").trim();
+    return t;
+  }
+
+  /** Com webhook: no máximo um item no select. Promo até esgotar; se servidor ainda não respondeu, só promo se existir. */
+  function umLotePromoOuRegularOuPrimeiro(pool) {
+    var p = pool.filter(function (l) {
+      return l.id === "promo";
+    });
+    if (p.length) return [p[0]];
+    var r = pool.filter(function (l) {
+      return l.id === "regular";
+    });
+    if (r.length) return [r[0]];
+    return pool.length ? [pool[0]] : [];
+  }
+
+  /**
+   * Um lote por vez (promo ou regular). Com 2+ lotes no config, só mostra os dois ao mesmo tempo se
+   * listarTodosLotesNoFormulario === true (teste local). Caso contrário: usa estado_lotes quando há
+   * webhookUrl; se não houver estado ainda, fica só o promocional (ou regular se não existir promo).
+   */
+  function lotesParaSelect() {
+    var all = lotesAtivos();
+    if (all.length <= 1) return all;
+    if (cfg.listarTodosLotesNoFormulario === true) return all;
+
+    var st = cfg.__estadoLotes;
+    var temWebhook = !!(cfg.webhookUrl || "").trim();
+
+    if (temWebhook && st && st.ok) {
+      if (!st.promoEsgotado) {
+        var ps = all.filter(function (l) {
+          return l.id === "promo";
+        });
+        return ps.length ? [ps[0]] : [];
+      }
+      if (!st.regularEsgotado) {
+        var rs = all.filter(function (l) {
+          return l.id === "regular";
+        });
+        return rs.length ? [rs[0]] : [];
+      }
+      return [];
+    }
+
+    return umLotePromoOuRegularOuPrimeiro(all);
+  }
+
+  async function buscarEstadoLotesDoServidor() {
+    cfg.__estadoLotes = { ok: false };
+    var url = (cfg.webhookUrl || "").trim();
+    if (!url) return;
+    try {
+      var res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ tipo: "estado_lotes" }),
+        mode: "cors",
+        credentials: "omit",
+      });
+      var text = (await res.text()).trim().replace(/^\uFEFF/, "");
+      var json = null;
+      try {
+        json = JSON.parse(text);
+      } catch (parseLo) {
+        json = null;
+      }
+      if (json && (json.ok === true || json.ok === "true")) {
+        cfg.__estadoLotes = {
+          ok: true,
+          promoEsgotado: !!json.promoEsgotado,
+          regularEsgotado: !!json.regularEsgotado,
+        };
+      } else if (json && (json.ok === false || json.ok === "false") && json.error) {
+        cfg.__estadoLotes = { ok: false, erro: String(json.error) };
+      }
+    } catch (errEl) {
+      cfg.__estadoLotes = { ok: false };
+    }
+  }
+
   function acharLote(id) {
     var list = cfg.lotes || [];
     for (var i = 0; i < list.length; i++) {
@@ -197,14 +289,34 @@
     var sel = document.getElementById("select-lote");
     if (!sel) return;
     sel.innerHTML = "";
-    var list = lotesAtivos();
+    var list = lotesParaSelect();
     if (list.length === 0) {
+      if (lotesAtivos().length > 0 && cfg.__estadoLotes && cfg.__estadoLotes.ok) {
+        var optFim = document.createElement("option");
+        optFim.value = "";
+        optFim.textContent = "Inscrições esgotadas (ambos os lotes)";
+        sel.appendChild(optFim);
+        sel.disabled = true;
+        atualizarUiLote();
+        return;
+      }
       var fallback = cfg.valorInscricao || "R$ 0,00";
       var opt = document.createElement("option");
       opt.value = "unico";
       opt.textContent = "Inscrição — " + fallback;
       sel.appendChild(opt);
       sel.selectedIndex = 0;
+      atualizarUiLote();
+      return;
+    }
+    if (list.length === 1) {
+      var only = list[0];
+      var o1 = document.createElement("option");
+      o1.value = only.id;
+      o1.textContent = only.nome + " — " + formatarMoedaBR(only.valorReais);
+      sel.appendChild(o1);
+      sel.selectedIndex = 0;
+      sel.disabled = false;
       atualizarUiLote();
       return;
     }
@@ -233,11 +345,7 @@
     var id = sel.value;
     var l = acharLote(id);
     if (hint) {
-      var h = l && l.descricao ? l.descricao : "";
-      if (l && l.limite > 0) {
-        h = (h ? h + " " : "") + "Máximo " + l.limite + " inscrições neste lote.";
-      }
-      hint.textContent = h;
+      hint.textContent = sanitizarDescricaoLote(l && l.descricao ? l.descricao : "");
     }
     if (asideNome) {
       if (l && l.nome) {
@@ -253,7 +361,8 @@
       el.textContent = valor;
     });
     var menorValor = valor;
-    var ativos = lotesAtivos();
+    var ativos = lotesParaSelect();
+    if (!ativos.length) ativos = lotesAtivos();
     if (ativos.length) {
       var menor = Number(ativos[0].valorReais);
       for (var i = 1; i < ativos.length; i++) {
@@ -271,7 +380,20 @@
   if (selectLote) {
     selectLote.addEventListener("change", atualizarUiLote);
   }
-  popularSelectLotes();
+  (async function initSelectLotes() {
+    var sel = document.getElementById("select-lote");
+    if (sel && (cfg.webhookUrl || "").trim()) {
+      sel.innerHTML = "";
+      var phLo = document.createElement("option");
+      phLo.value = "";
+      phLo.textContent = "Carregando lotes…";
+      phLo.disabled = true;
+      phLo.selected = true;
+      sel.appendChild(phLo);
+    }
+    await buscarEstadoLotesDoServidor();
+    popularSelectLotes();
+  })();
 
   function atualizarPainelPagamento() {
     var sel = document.getElementById("select-forma-pagamento");
@@ -404,6 +526,63 @@
     return true;
   }
 
+  /**
+   * Só considera sucesso se o Apps Script devolver JSON confirmando (ok: true ou checkout MP tratado).
+   * Não usa mais no-cors fingindo sucesso — o inscrito precisa ver erro se a planilha não confirmar.
+   */
+  function interpretarRespostaPlanilha(res, text, esperaCheckout) {
+    var json = null;
+    try {
+      json = JSON.parse(text);
+    } catch (parseErr) {
+      json = null;
+    }
+    if (json && json.ok === false) {
+      return { ok: false, error: json.error || "Inscrição não aceita no servidor." };
+    }
+    if (!res.ok) {
+      return { ok: false, error: "Servidor respondeu " + res.status };
+    }
+    if (!json) {
+      return {
+        ok: false,
+        error:
+          "Resposta do servidor não é JSON válido (pode ser página de erro do Google). No Apps Script: Implantar → Gerenciar implantações → Nova versão → Implantar, e confira a URL em config.js.",
+      };
+    }
+    var checkoutUrl = json.checkoutUrl ? String(json.checkoutUrl).trim() : null;
+    var checkoutFalhou = !!json.checkoutFalhou;
+    var erroCheckout = json.erroCheckout ? String(json.erroCheckout) : null;
+    if (esperaCheckout && !checkoutUrl && !checkoutFalhou) {
+      checkoutFalhou = true;
+      erroCheckout =
+        erroCheckout ||
+        "O Apps Script em produção parece antigo (só devolve ok:true sem checkoutUrl). Copie o código atual de google-apps-script.gs, salve, depois Implantar → Gerenciar implantações → ícone lápis → Nova versão → Implantar. Em Propriedades do script, defina MERCADO_PAGO_ACCESS_TOKEN.";
+    }
+    var confirmado =
+      json.ok === true ||
+      json.ok === "true" ||
+      (esperaCheckout && (checkoutUrl || checkoutFalhou));
+    if (!confirmado) {
+      return {
+        ok: false,
+        error:
+          json.error ||
+          "O servidor não confirmou o registro na planilha. Confira webhookUrl em config.js (URL /exec) e publique uma nova versão da Web App.",
+      };
+    }
+    return {
+      ok: true,
+      checkoutUrl: checkoutUrl,
+      checkoutFalhou: checkoutFalhou,
+      erroCheckout: erroCheckout,
+      loteAjustadoAutomatico: !!json.loteAjustadoAutomatico,
+      lote: json.lote != null ? String(json.lote) : "",
+      loteNome: json.loteNome != null ? String(json.loteNome) : "",
+      valorReais: json.valorReais !== undefined && json.valorReais !== null ? Number(json.valorReais) : undefined,
+    };
+  }
+
   async function enviarWebhook(payload) {
     var url = (cfg.webhookUrl || "").trim();
     if (!url) {
@@ -414,79 +593,56 @@
             "Para abrir o Mercado Pago é preciso da URL do Apps Script em config.js (webhookUrl). Sem isso só é possível inscrição com pagamento na secretaria.",
         };
       }
-      return { ok: true, skipped: true };
+      if (cfg.inscricaoSomenteWhatsApp === true) {
+        return { ok: true, skipped: true };
+      }
+      return {
+        ok: false,
+        error:
+          "Sem registro na planilha: configure webhookUrl em config.js com a URL da Web App do Apps Script (termina em /exec), implante uma nova versão e publique o config.js no servidor. As novas linhas ficam na aba de inscrições pendentes.",
+      };
     }
 
     var esperaCheckout = payload.mercadoPago === true;
     var body = JSON.stringify(payload);
     /** text/plain evita preflight CORS que costuma falhar com o Apps Script; o script lê o JSON em postData.contents. */
     var headersPlain = { "Content-Type": "text/plain;charset=utf-8" };
+    var maxTentativas = esperaCheckout ? 1 : 3;
 
-    try {
-      var res = await fetch(url, {
-        method: "POST",
-        headers: headersPlain,
-        body: body,
-        mode: "cors",
-        credentials: "omit",
-      });
-      var text = (await res.text()).trim().replace(/^\uFEFF/, "");
-      var json = null;
+    for (var t = 0; t < maxTentativas; t++) {
       try {
-        json = JSON.parse(text);
-      } catch (parseErr) {
-        json = null;
-      }
-      if (json && json.ok === false) {
-        return { ok: false, error: json.error || "Inscrição não aceita no servidor." };
-      }
-      if (!res.ok) return { ok: false, error: "Servidor respondeu " + res.status };
-      if (!json) {
-        return {
-          ok: false,
-          error:
-            "Resposta do servidor não é JSON válido (pode ser página de erro do Google). No Apps Script: Implantar → Gerenciar implantações → Nova versão → Implantar, e confira a URL em config.js.",
-        };
-      }
-      var checkoutUrl = json.checkoutUrl ? String(json.checkoutUrl).trim() : null;
-      var checkoutFalhou = !!json.checkoutFalhou;
-      var erroCheckout = json.erroCheckout ? String(json.erroCheckout) : null;
-      if (esperaCheckout && !checkoutUrl && !checkoutFalhou) {
-        checkoutFalhou = true;
-        erroCheckout =
-          erroCheckout ||
-          "O Apps Script em produção parece antigo (só devolve ok:true sem checkoutUrl). Copie o código atual de google-apps-script.gs, salve, depois Implantar → Gerenciar implantações → ícone lápis → Nova versão → Implantar. Em Propriedades do script, defina MERCADO_PAGO_ACCESS_TOKEN.";
-      }
-      return {
-        ok: true,
-        checkoutUrl: checkoutUrl,
-        checkoutFalhou: checkoutFalhou,
-        erroCheckout: erroCheckout,
-        loteAjustadoAutomatico: !!json.loteAjustadoAutomatico,
-        lote: json.lote != null ? String(json.lote) : "",
-        loteNome: json.loteNome != null ? String(json.loteNome) : "",
-        valorReais: json.valorReais !== undefined && json.valorReais !== null ? Number(json.valorReais) : undefined,
-      };
-    } catch (e) {
-      if (esperaCheckout) {
-        return {
-          ok: false,
-          error:
-            "Não foi possível abrir o pagamento online (falha de conexão ou bloqueio). Tente outra rede, desative bloqueador ou pague na secretaria. Não envie o formulário de novo se já apareceu mensagem de sucesso antes — fale com a organização.",
-        };
-      }
-      try {
-        await fetch(url, {
+        if (t > 0) {
+          await new Promise(function (resolve) {
+            setTimeout(resolve, 450 * t);
+          });
+        }
+        var res = await fetch(url, {
           method: "POST",
-          body: body,
-          mode: "no-cors",
           headers: headersPlain,
+          body: body,
+          mode: "cors",
+          credentials: "omit",
         });
-        return { ok: true };
-      } catch (e2) {
-        return { ok: false, error: "Não foi possível salvar na planilha agora. Use o WhatsApp abaixo." };
+        var text = (await res.text()).trim().replace(/^\uFEFF/, "");
+        return interpretarRespostaPlanilha(res, text, esperaCheckout);
+      } catch (err) {
+        if (t === maxTentativas - 1) {
+          if (esperaCheckout) {
+            return {
+              ok: false,
+              error:
+                "Não foi possível abrir o pagamento online (falha de conexão ou bloqueio). Tente outra rede, desative bloqueador ou pague na secretaria. Não envie o formulário de novo se já apareceu mensagem de sucesso antes — fale com a organização.",
+            };
+          }
+          return {
+            ok: false,
+            error:
+              "Não foi possível registrar na planilha (sem resposta confirmada do servidor). Verifique a internet e tente de novo. Confira também se webhookUrl em config.js está certa e se o Apps Script foi implantado como nova versão.",
+          };
+        }
       }
     }
+    return { ok: false, error: "Falha ao enviar a inscrição." };
   }
 
   form.addEventListener("submit", async function (e) {
@@ -515,7 +671,7 @@
     dados.protocolo = protocolo;
     dados.telefoneDigitos = apenasDigitos(dados.telefone);
 
-    if (!dados.lote && lotesAtivos().length > 0) {
+    if (!dados.lote && lotesParaSelect().length > 0) {
       if (statusEl) {
         statusEl.hidden = false;
         statusEl.className = "form-status form-status--error";
@@ -668,8 +824,11 @@
     if (layoutInsc) layoutInsc.hidden = true;
 
     form.reset();
-    popularSelectLotes();
-    configurarFormaPagamento();
+    (async function refetchLotesAposInscricao() {
+      await buscarEstadoLotesDoServidor();
+      popularSelectLotes();
+      configurarFormaPagamento();
+    })();
 
     if (successPanel) {
       successPanel.hidden = false;
@@ -815,9 +974,18 @@
   }
 
   function renderDados(d) {
+    d = d || {};
+    var nomeEv = String(d.nomeEvento || cfg.nomeEvento || "").trim();
+    var dataEv = String(d.dataEvento || cfg.dataEvento || "").trim();
+    var horaEv = String(d.horarioEvento || cfg.horarioEvento || "").trim();
+    var locEv = String(d.localEvento || cfg.localEvento || "").trim();
     var linhas = [
       ["Protocolo", d.protocolo || "—"],
       ["Situação", d.situacaoLista || "—"],
+      ["Evento", nomeEv || "—"],
+      ["Data do evento", dataEv || "—"],
+      ["Horário (concentração e largada)", horaEv || "—"],
+      ["Local", locEv || "—"],
       ["Status do pagamento", d.statusPagamento || "—"],
       ["Nome", d.nome || "—"],
       ["Cidade", d.cidade || "—"],
@@ -826,10 +994,6 @@
       ["Forma de pagamento", d.formaPagamento || "—"],
       ["Percurso", d.percurso || "—"],
       ["Tam. camisa", d.camisa || "—"],
-      ["Evento", d.nomeEvento || "—"],
-      ["Data do evento", d.dataEvento || "—"],
-      ["Horário (concentração e largada)", d.horarioEvento || "—"],
-      ["Local", d.localEvento || "—"],
     ];
     var parts = ['<h3 class="consulta-resultado__titulo">Inscrição encontrada</h3>', '<dl class="consulta-dl">'];
     linhas.forEach(function (pair) {

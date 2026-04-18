@@ -30,14 +30,23 @@ window.CORRIDA_CONFIG = {
    * 3) Menu Extensões → Apps Script → cole o código do arquivo google-apps-script.gs → Salvar.
    * 4) No Apps Script: Implantar → Nova implantação → tipo “App da web” → Executar como: Eu → Acesso: Qualquer pessoa.
    * 5) Copie a URL que o Google mostrar (começa com https://script.google.com/...) e cole em webhookUrl abaixo.
-   * Enquanto não tiver essa URL, deixe "" — o formulário ainda funciona (só WhatsApp, sem gravar na planilha).
+   * webhookUrl vazio: a inscrição NÃO grava na planilha (a menos que inscricaoSomenteWhatsApp = true).
    */
+  /** Mesma URL de Implantar → App da Web (/exec). O script monta ?protocolo=&senha= para o link "Aprovar PIX". */
   webhookUrl:
-    "https://script.google.com/a/macros/redealia.com/s/AKfycbwClwfOb9G4AXWFW0tjQAMAkuX_VlmlBHJC6nFPuGczHZZBM0XLv4p36mYF0RvvHCu7/exec",
+    "https://script.google.com/macros/s/AKfycbxL_3csfdYsIsimppYjGf4rK44kRuArvItMUs2miQtVy8FusEVzmwCe-glgNrTAYiBi/exec",
+  /**
+   * true = não exige webhookUrl (só abre WhatsApp, sem linha na planilha). Use false em produção.
+   */
+  inscricaoSomenteWhatsApp: false,
   /** Usado só se a lista lotes estiver vazia (fallback). */
   valorInscricao: "R$ " + PRECO_REGULAR.toFixed(2).replace(".", ","),
   pixChave: "(informe a chave PIX ou orientação de pagamento)",
   nomeEvento: "Corrida Mariana em prol do ECC e EJC de Sanharó",
+  /** Usados na consulta pública (e fallback se o Apps Script antigo não devolver). Alinhar com google-apps-script.gs. */
+  dataEvento: "31 de maio de 2026",
+  horarioEvento: "Concentração às 5h30 · Largada às 6h da manhã",
+  localEvento: "Sanharó, Pernambuco",
 
   /**
    * Mercado Pago — PRODUÇÃO (Checkout Pro)
@@ -47,35 +56,28 @@ window.CORRIDA_CONFIG = {
    */
   mercadoPago: {
     ativo: true,
-    urlRetorno: "https://superlative-babka-667cbe.netlify.app/",
+    urlRetorno: "https://corrida-sanharo.com.br/",
     useSandbox: false,
   },
 
   /**
-   * Lotes ativos:
-   * - Promo: 50 camisas (R$ 1,00 no teste | R$ 50,00 em produção)
-   * - Regular: 100 camisas (R$ 1,00 no teste | R$ 55,00 em produção)
-   * Alinhar com google-apps-script.gs (IDs, valores e limites).
+   * Lotes ativos (IDs promo / regular). Com webhookUrl, o site consulta estado_lotes e mostra
+   * só o promocional até 50 inscrições pagas; depois só o regular até acabar.
+   * Alinhar limites com google-apps-script.gs (LIMITE_LOTE_*).
    */
   lotes: [
     {
       id: "promo",
       nome: "Lote promocional",
       valorReais: PRECO_PROMO,
-      descricao:
-        "Primeiras 50 camisas por R$ " +
-        PRECO_PROMO.toFixed(2).replace(".", ",") +
-        (MODO_TESTE ? " (modo teste)." : "."),
+      descricao: "Valor promocional enquanto houver vagas." + (MODO_TESTE ? " (modo teste.)" : ""),
       limite: 50,
     },
     {
       id: "regular",
       nome: "Lote regular",
       valorReais: PRECO_REGULAR,
-      descricao:
-        "Após o promocional: 100 camisas por R$ " +
-        PRECO_REGULAR.toFixed(2).replace(".", ",") +
-        (MODO_TESTE ? " (modo teste)." : "."),
+      descricao: "Valor padrão após o encerramento das vagas promocionais." + (MODO_TESTE ? " (modo teste.)" : ""),
       limite: 100,
     },
   ],
