@@ -384,6 +384,26 @@
     return true;
   }
 
+  /** Quando o servidor reclassifica promo → regular num único POST (loteAjustadoAutomatico). */
+  function aplicarAjusteLoteDoServidor(dados, payload, result) {
+    if (!result || !result.loteAjustadoAutomatico) return false;
+    if (result.lote) dados.lote = String(result.lote).trim();
+    if (result.loteNome) dados.loteNome = String(result.loteNome).trim();
+    if (result.valorReais !== undefined && result.valorReais !== null && !isNaN(Number(result.valorReais))) {
+      dados.valorReais = Number(result.valorReais);
+      dados.valorFormatado = formatarMoedaBR(dados.valorReais);
+    }
+    payload.lote = dados.lote;
+    payload.loteNome = dados.loteNome;
+    payload.valorReais = dados.valorReais;
+    var sel = document.getElementById("select-lote");
+    if (sel && dados.lote) {
+      sel.value = dados.lote;
+      atualizarUiLote();
+    }
+    return true;
+  }
+
   async function enviarWebhook(payload) {
     var url = (cfg.webhookUrl || "").trim();
     if (!url) {
@@ -442,6 +462,10 @@
         checkoutUrl: checkoutUrl,
         checkoutFalhou: checkoutFalhou,
         erroCheckout: erroCheckout,
+        loteAjustadoAutomatico: !!json.loteAjustadoAutomatico,
+        lote: json.lote != null ? String(json.lote) : "",
+        loteNome: json.loteNome != null ? String(json.loteNome) : "",
+        valorReais: json.valorReais !== undefined && json.valorReais !== null ? Number(json.valorReais) : undefined,
       };
     } catch (e) {
       if (esperaCheckout) {
@@ -542,6 +566,12 @@
       }
     }
 
+    if (result.ok && result.loteAjustadoAutomatico) {
+      if (aplicarAjusteLoteDoServidor(dados, payload, result)) {
+        trocouParaRegular = true;
+      }
+    }
+
     var msg = montarMensagemWhatsApp(dados);
     var urlWa = urlWhatsApp(msg);
     if (btnWa) btnWa.href = urlWa;
@@ -601,7 +631,9 @@
       }
       if (trocouParaRegular) {
         sucessoTexto.innerHTML =
-          "O <strong>lote promocional esgotou</strong> e sua inscrição foi ajustada automaticamente para o <strong>lote regular (R$ 55,00)</strong>. " +
+          "O <strong>lote promocional esgotou</strong> e sua inscrição foi ajustada automaticamente para o <strong>lote regular (" +
+          (dados.valorFormatado || formatarMoedaBR(dados.valorReais)) +
+          ")</strong>. " +
           sucessoTexto.innerHTML;
       }
     }
@@ -794,6 +826,10 @@
       ["Forma de pagamento", d.formaPagamento || "—"],
       ["Percurso", d.percurso || "—"],
       ["Tam. camisa", d.camisa || "—"],
+      ["Evento", d.nomeEvento || "—"],
+      ["Data do evento", d.dataEvento || "—"],
+      ["Horário (concentração e largada)", d.horarioEvento || "—"],
+      ["Local", d.localEvento || "—"],
     ];
     var parts = ['<h3 class="consulta-resultado__titulo">Inscrição encontrada</h3>', '<dl class="consulta-dl">'];
     linhas.forEach(function (pair) {

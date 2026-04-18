@@ -10,11 +10,16 @@
  *   WEB_APP_URL (opcional) = mesma URL do webhookUrl em config.js. Se não definir, usa WEB_APP_URL_FALLBACK no código abaixo.
  *   APROVACAO_SENHA = senha para aprovar pagamento presencial (endpoint /exec/{protocolo}/{senha}).
  *   APROVACAO_EMAILS (opcional) = e-mails autorizados a aprovar (separados por vírgula ou ponto e vírgula).
+ *   E-mail: o endereço "De" é sempre a conta Google que implanta/autoriza o script. Opcional nas Propriedades do script:
+ *     EMAIL_REMETENTE_NOME = nome exibido no remetente (ex.: Corrida Mariana).
+ *     EMAIL_REPLY_TO = e-mail para onde vão as respostas (Reply-To).
  *
  * Produção MP: (1) token de produção em MERCADO_PAGO_ACCESS_TOKEN, (2) config.js com useSandbox: false e urlRetorno HTTPS real,
  * (3) Implantar → Gerenciar implantações → Nova versão na Web App.
  *
- * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca por e-mail + telefone (só dígitos) na lista oficial e em Inscrições pendentes MP.
+ * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca por e-mail + telefone (só dígitos) na lista oficial e em todas as abas de fila pendentes (nomes em NOMES_RESERVADOS_ABA_PENDENTES).
+ *
+ * PIX via WhatsApp (presencial): a linha fica na fila de pendentes até aprovar. GET /exec?protocolo=…&senha=… (ou /exec/PROTO/SENHA) procura o protocolo na lista oficial e em todas essas abas; ao aprovar, move para a lista oficial, status "Pago (presencial confirmado)" e envia e-mail de confirmação (MailApp autorizado).
  *
  * Duplicata + Mercado Pago: se o POST vier com mercadoPago: true, linhas não pagas com o mesmo e-mail ou telefone
  * (status "Aguardando pagamento online" ou "Pendente (PIX via WhatsApp)") são removidas antes da checagem de duplicata,
@@ -42,26 +47,43 @@ var SENHA_MUDANCA_STATUS_PAGAMENTO = "ejcecc@2026@corrida";
 /** Alinhe com config.js → nomeEvento (texto do e-mail de confirmação). */
 var NOME_EVENTO_EMAIL = "Corrida Mariana em prol do ECC e EJC de Sanharó";
 var DATA_EVENTO_EMAIL = "31 de maio de 2026";
-var HORARIO_EVENTO_EMAIL = "Largada a partir das 7h";
+var HORARIO_EVENTO_EMAIL = "Concentração às 5h30 · Largada às 6h da manhã";
 var LOCAL_EVENTO_EMAIL = "Sanharó, Pernambuco";
 var WHATSAPP_ORGANIZACAO_EMAIL = "5587991200165";
 var INSTAGRAM_ORGANIZACAO_URL = "https://instagram.com/";
 /** Use URL pública da logo (opcional). Ex.: https://seusite.com/assets/logo.png */
 var LOGO_EMAIL_URL = "";
 
+/**
+ * Nome exibido como remetente nos e-mails (MailApp → campo "name"). O endereço continua sendo a conta que autoriza o script.
+ * Sobrescreve com a propriedade do script EMAIL_REMETENTE_NOME. Deixe "" para usar o padrão do Gmail.
+ */
+var EMAIL_REMETENTE_NOME = "";
+
+/**
+ * Reply-To: para onde o inscrito responde ao e-mail. Útil se o envio é pela sua conta mas as respostas devem ir à organização.
+ * Sobrescreve com EMAIL_REPLY_TO nas Propriedades do script. Deixe "" para não definir.
+ */
+var EMAIL_REPLY_TO = "";
+
 /** Mesma URL que config.js → webhookUrl (termina em /exec). Alinhe os dois se mudar a implantação. */
 var WEB_APP_URL_FALLBACK =
   "https://script.google.com/a/macros/redealia.com/s/AKfycbwClwfOb9G4AXWFW0tjQAMAkuX_VlmlBHJC6nFPuGczHZZBM0XLv4p36mYF0RvvHCu7/exec";
 
 /** Aba principal: inscrições confirmadas (pagamento aprovado). */
-/** Aba "Inscrições pendentes MP": fila de pendentes (Mercado Pago e presencial/PIX). */
+/** Aba de fila: Mercado Pago e presencial/PIX. O script também reconhece nomes alternativos (ver obterAbaPendentes). */
 var NOME_ABA_PENDENTES = "Inscrições pendentes MP";
+/** Nomes de aba que são só fila de pendentes — nunca usar como lista oficial (fallback sheets[0]). */
+var NOMES_RESERVADOS_ABA_PENDENTES = ["Inscrições pendentes MP", "Pendentes", "Inscrições pendentes", "Pendências"];
 
 /** Limites de lotes: alinhar com config.js */
 var LIMITE_LOTE_PROMO = 50;
 var ID_LOTE_PROMO = "promo";
-var LIMITE_LOTE_REGULAR = 150;
+var LIMITE_LOTE_REGULAR = 100;
 var ID_LOTE_REGULAR = "regular";
+/** Preços em produção (alinhar com config.js PRECO_PROMO / PRECO_REGULAR). Usados ao reclassificar lote automaticamente. */
+var VALOR_LOTE_PROMO_REAIS = 50;
+var VALOR_LOTE_REGULAR_REAIS = 55;
 /** Índice da coluna "Lote id" (0-based) */
 var COL_IX_LOTE = 8;
 var COL_IX_EMAIL = 3;
@@ -135,10 +157,15 @@ function jaTemCadastro(sheet, email, telDigits) {
 function jaTemCadastroQualquerAba(ss, email, telDigits) {
   var m = jaTemCadastro(obterAbaInscricoes(ss), email, telDigits);
   if (m) return m;
-  var pend = obterAbaPendentes(ss);
-  if (pend.getLastRow() === 0) return null;
-  garantirCabecalhosPlanilha(pend);
-  return jaTemCadastro(pend, email, telDigits);
+  var listaPend = listarAbasPorNomesPendentes(ss);
+  for (var i = 0; i < listaPend.length; i++) {
+    var pend = listaPend[i];
+    if (pend.getLastRow() === 0) continue;
+    garantirCabecalhosPlanilha(pend);
+    var r = jaTemCadastro(pend, email, telDigits);
+    if (r) return r;
+  }
+  return null;
 }
 
 /**
@@ -186,7 +213,10 @@ function removerInscricoesNaoPagasParaNovoCheckoutMp(ss, email, telDigits) {
       sh.deleteRow(i + 1);
     }
   }
-  purgeSheet(obterAbaPendentes(ss));
+  var listaPendPurge = listarAbasPorNomesPendentes(ss);
+  for (var pi = 0; pi < listaPendPurge.length; pi++) {
+    purgeSheet(listaPendPurge[pi]);
+  }
   purgeSheet(obterAbaInscricoes(ss));
 }
 
@@ -207,33 +237,126 @@ function contarInscricoesLote(sheet, loteId) {
 
 function contarInscricoesLoteTotal(ss, loteId) {
   var n = contarInscricoesLote(obterAbaInscricoes(ss), loteId);
-  var pend = obterAbaPendentes(ss);
-  if (pend.getLastRow() > 0) {
-    garantirCabecalhosPlanilha(pend);
-    n += contarInscricoesLote(pend, loteId);
+  var listaPendLote = listarAbasPorNomesPendentes(ss);
+  for (var li = 0; li < listaPendLote.length; li++) {
+    var pend = listaPendLote[li];
+    if (pend.getLastRow() > 0) {
+      garantirCabecalhosPlanilha(pend);
+      n += contarInscricoesLote(pend, loteId);
+    }
   }
   return n;
 }
 
-function obterAbaInscricoes(ss) {
-  var sh = ss.getSheetByName("Lista de inscritos");
-  if (sh) return sh;
-  sh = ss.getSheetByName("Inscrições");
-  if (sh) return sh;
-  sh = ss.getSheetByName("Página1");
-  if (sh) return sh;
-  sh = ss.getSheetByName("Sheet1");
-  if (sh) return sh;
-  var sheets = ss.getSheets();
-  return sheets.length ? sheets[0] : null;
+function nomeAbaEhReservadaPendentes(nome) {
+  var n = String(nome || "").trim();
+  for (var i = 0; i < NOMES_RESERVADOS_ABA_PENDENTES.length; i++) {
+    if (n === NOMES_RESERVADOS_ABA_PENDENTES[i]) return true;
+  }
+  return false;
 }
 
-function obterAbaPendentes(ss) {
-  var sh = ss.getSheetByName(NOME_ABA_PENDENTES);
-  if (!sh) {
-    sh = ss.insertSheet(NOME_ABA_PENDENTES);
+/** Abre a planilha do evento ou lança erro claro (evita TypeError em ss.getSheetByName). */
+function obterPlanilhaCorridaOuErro() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  if (!ss || typeof ss.getSheetByName !== "function") {
+    throw new Error(
+      "Não foi possível abrir a planilha. Confira ID_PLANILHA no script e permissões da conta que executa a Web App."
+    );
   }
-  return sh;
+  return ss;
+}
+
+function obterAbaInscricoes(ss) {
+  if (ss == null || typeof ss.getSheetByName !== "function") {
+    throw new Error("obterAbaInscricoes: planilha (ss) inválida ou não informada.");
+  }
+  var sh = ss.getSheetByName("Lista de inscritos");
+  if (sh && !nomeAbaEhReservadaPendentes(sh.getName())) return sh;
+  sh = ss.getSheetByName("Inscrições");
+  if (sh && !nomeAbaEhReservadaPendentes(sh.getName())) return sh;
+  sh = ss.getSheetByName("Página1");
+  if (sh && !nomeAbaEhReservadaPendentes(sh.getName())) return sh;
+  sh = ss.getSheetByName("Sheet1");
+  if (sh && !nomeAbaEhReservadaPendentes(sh.getName())) return sh;
+  var sheets = ss.getSheets();
+  for (var j = 0; j < sheets.length; j++) {
+    if (!nomeAbaEhReservadaPendentes(sheets[j].getName())) return sheets[j];
+  }
+  return null;
+}
+
+/**
+ * Todas as abas da planilha que são fila de pendentes (por nome), exceto a lista oficial.
+ * Ordem = NOMES_RESERVADOS_ABA_PENDENTES (para escrita preferir a primeira vazia ou com dados).
+ */
+function listarAbasPorNomesPendentes(ss) {
+  if (ss == null || typeof ss.getSheetByName !== "function") {
+    throw new Error("listarAbasPorNomesPendentes: planilha (ss) inválida ou não informada.");
+  }
+  var main = obterAbaInscricoes(ss);
+  var list = [];
+  var seen = {};
+  for (var k = 0; k < NOMES_RESERVADOS_ABA_PENDENTES.length; k++) {
+    var sh = ss.getSheetByName(NOMES_RESERVADOS_ABA_PENDENTES[k]);
+    if (!sh) continue;
+    var id = sh.getSheetId();
+    if (seen[id]) continue;
+    if (main && id === main.getSheetId()) continue;
+    seen[id] = true;
+    list.push(sh);
+  }
+  return list;
+}
+
+/**
+ * Aba onde gravar nova pendência: se existir mais de uma aba de nomes conhecidos, prefere a que já tem linhas de dado
+ * (evita gravar numa aba vazia enquanto o protocolo continua noutra — o link de aprovação deixaria de achar a linha).
+ */
+function obterAbaPendentes(ss) {
+  if (ss == null || typeof ss.insertSheet !== "function") {
+    throw new Error("obterAbaPendentes: planilha (ss) inválida ou não informada.");
+  }
+  var candidates = listarAbasPorNomesPendentes(ss);
+  if (candidates.length === 0) {
+    /** Nova aba no fim da planilha (índice = quantidade de abas), para não virar a “primeira aba” à esquerda. */
+    var idxFim = ss.getSheets().length;
+    return ss.insertSheet(NOME_ABA_PENDENTES, idxFim);
+  }
+  for (var i = 0; i < candidates.length; i++) {
+    if (candidates[i].getLastRow() > 1) return candidates[i];
+  }
+  return candidates[0];
+}
+
+/** Retorna { sheet, rowIndex } ou null se o protocolo não estiver em nenhuma aba de pendentes conhecida. */
+function encontrarProtocoloNasAbasPendentes(ss, protocolo) {
+  if (ss == null || typeof ss.getSheetByName !== "function") {
+    throw new Error("encontrarProtocoloNasAbasPendentes: planilha (ss) inválida ou não informada.");
+  }
+  var lista = listarAbasPorNomesPendentes(ss);
+  var p = String(protocolo || "").trim();
+  for (var i = 0; i < lista.length; i++) {
+    garantirCabecalhosPlanilha(lista[i]);
+    var r = encontrarLinhaPorProtocolo(lista[i], p);
+    if (r > 0) return { sheet: lista[i], rowIndex: r };
+  }
+  return null;
+}
+
+/**
+ * Garante que lista oficial e fila de pendentes são abas diferentes (evita gravar presencial na “lista” por engano).
+ */
+function assertAbasInscricaoDistintas(main, pend) {
+  if (!main || !pend) return;
+  if (main.getSheetId() === pend.getSheetId()) {
+    throw new Error(
+      "A aba principal e a de pendentes coincidem. Na planilha, use uma aba com nome \"Lista de inscritos\" (oficial) " +
+        "e outra para a fila: \"" +
+        NOME_ABA_PENDENTES +
+        "\" ou \"Pendentes\". Não use o mesmo nome para as duas funções."
+    );
+  }
 }
 
 function garantirCabecalhosPlanilha(sheet) {
@@ -295,8 +418,14 @@ function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
   var td = soDigitos(telefoneDigitos);
   if (!em || td.length < 10) return null;
 
-  var alvo = [obterAbaInscricoes(ss), obterAbaPendentes(ss)];
-  var nomes = ["lista_oficial", "pendente_mp"];
+  var mainB = obterAbaInscricoes(ss);
+  var listaPB = listarAbasPorNomesPendentes(ss);
+  var alvo = [mainB];
+  var nomes = ["lista_oficial"];
+  for (var pb = 0; pb < listaPB.length; pb++) {
+    alvo.push(listaPB[pb]);
+    nomes.push("pendente_fila");
+  }
   for (var s = 0; s < alvo.length; s++) {
     var sheet = alvo[s];
     if (!sheet || sheet.getLastRow() === 0) continue;
@@ -347,6 +476,11 @@ function linhaParaRespostaConsulta(row, origem) {
     formaPagamento: String(row[11] || "").trim(),
     statusPagamento: String(row[COL_IX_STATUS] || "").trim(),
     situacaoLista: situacaoLista,
+    /** Alinhado aos e-mails (NOME_EVENTO_EMAIL, DATA_EVENTO_EMAIL, …) para exibir na consulta pública. */
+    nomeEvento: NOME_EVENTO_EMAIL,
+    dataEvento: DATA_EVENTO_EMAIL,
+    horarioEvento: HORARIO_EVENTO_EMAIL,
+    localEvento: LOCAL_EVENTO_EMAIL,
   };
 }
 
@@ -399,7 +533,7 @@ function listaBackupDaAba(sheet) {
  * Snapshot da aba Lista de inscritos (cabeçalho ignorado). Uso: backup local em JSON.
  */
 function gerarPayloadBackupListaInscritos() {
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var ss = obterPlanilhaCorridaOuErro();
   var sheet = obterAbaInscricoes(ss);
   if (!sheet) throw new Error("Aba Lista de inscritos não encontrada.");
   garantirCabecalhosPlanilha(sheet);
@@ -421,13 +555,18 @@ function gerarPayloadBackupListaInscritos() {
  * Snapshot completo para backup automático: lista oficial + aba de pendentes.
  */
 function gerarPayloadBackupCompleto() {
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var ss = obterPlanilhaCorridaOuErro();
   var sheet = obterAbaInscricoes(ss);
   if (!sheet) throw new Error("Aba Lista de inscritos não encontrada.");
   garantirCabecalhosPlanilha(sheet);
   var listaOficial = listaBackupDaAba(sheet);
-  var pend = obterAbaPendentes(ss);
-  var listaPend = listaBackupDaAba(pend);
+  var listaPend = [];
+  var shPendBackup = listarAbasPorNomesPendentes(ss);
+  for (var bi = 0; bi < shPendBackup.length; bi++) {
+    garantirCabecalhosPlanilha(shPendBackup[bi]);
+    var trecho = listaBackupDaAba(shPendBackup[bi]);
+    for (var bj = 0; bj < trecho.length; bj++) listaPend.push(trecho[bj]);
+  }
   return {
     meta: {
       descricao: "Backup automático: lista oficial + inscrições pendentes (Mercado Pago e presencial/PIX).",
@@ -511,7 +650,7 @@ function executarConsultaInscricao(data) {
   if (soDigitos(tel).length < 10) {
     return { ok: false, error: "Telefone inválido: use DDD + número (ex.: (87) 99999-9999)." };
   }
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var ss = obterPlanilhaCorridaOuErro();
   var achado = buscarInscricaoPorEmailETelefone(ss, email, tel);
   if (!achado) {
     return {
@@ -560,6 +699,25 @@ function escapeHtmlEmail(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/** Opções extras do MailApp (nome do remetente, reply-to). Propriedades do script têm prioridade sobre as variáveis do código. */
+function opcoesRemetenteMailApp() {
+  var props = PropertiesService.getScriptProperties();
+  var nome = String(props.getProperty("EMAIL_REMETENTE_NOME") || EMAIL_REMETENTE_NOME || "").trim();
+  var replyTo = String(props.getProperty("EMAIL_REPLY_TO") || EMAIL_REPLY_TO || "").trim();
+  var out = {};
+  if (nome) out.name = nome;
+  if (replyTo && replyTo.indexOf("@") > 0) out.replyTo = replyTo;
+  return out;
+}
+
+function enviarMailAppComRemetente(opts) {
+  var extra = opcoesRemetenteMailApp();
+  for (var k in extra) {
+    if (Object.prototype.hasOwnProperty.call(extra, k)) opts[k] = extra[k];
+  }
+  MailApp.sendEmail(opts);
 }
 
 /**
@@ -696,7 +854,7 @@ function enviarEmailInscricaoRecebida(rowData) {
     "</div>";
 
   try {
-    MailApp.sendEmail({
+    enviarMailAppComRemetente({
       to: email,
       subject: "Inscrição recebida — " + NOME_EVENTO_EMAIL,
       body: corpoTexto,
@@ -708,10 +866,105 @@ function enviarEmailInscricaoRecebida(rowData) {
 }
 
 /**
+ * Dados variáveis para o template único de confirmação de pagamento (texto + chip + cores).
+ * payJson: GET /v1/payments/:id só no webhook MP.
+ */
+function detalheConfirmacaoPagamentoParaTemplate(rowData, payJson) {
+  var status = String(rowData[COL_IX_STATUS] || "").toLowerCase();
+  if (status.indexOf("presencial") !== -1) {
+    return {
+      chipLabel: "Presencial",
+      chipCor: "#004C74",
+      txt:
+        "Meio: confirmação presencial pela organização.\n\n" +
+        "Seu pagamento foi confirmado pela organização e sua inscrição está na lista oficial do evento.",
+      fraseHtml:
+        "A organização <strong>confirmou seu pagamento</strong>. Sua inscrição já consta na <strong>lista oficial</strong> do evento — é só comparecer no dia e curtir a corrida.",
+    };
+  }
+  if (payJson && typeof payJson === "object") {
+    var pmId = String(payJson.payment_method_id || "").toLowerCase();
+    var ptId = String(payJson.payment_type_id || "").toLowerCase();
+    if (pmId === "pix") {
+      return {
+        chipLabel: "PIX",
+        chipCor: "#00b1a5",
+        txt:
+          "Meio: PIX (Mercado Pago).\n\n" +
+          "Seu pagamento via PIX pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
+        fraseHtml:
+          "Identificamos e <strong>aprovamos</strong> seu pagamento via <strong>PIX</strong> pelo Mercado Pago. Sua vaga está <strong>garantida</strong> na lista oficial.",
+      };
+    }
+    if (ptId === "credit_card") {
+      return {
+        chipLabel: "Cartão de crédito",
+        chipCor: "#004C74",
+        txt:
+          "Meio: cartão de crédito (Mercado Pago).\n\n" +
+          "Seu pagamento com cartão de crédito pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
+        fraseHtml:
+          "Seu pagamento com <strong>cartão de crédito</strong> pelo Mercado Pago foi <strong>aprovado</strong>. Sua inscrição já está na <strong>lista oficial</strong>.",
+      };
+    }
+    if (ptId === "debit_card") {
+      return {
+        chipLabel: "Cartão de débito",
+        chipCor: "#006799",
+        txt:
+          "Meio: cartão de débito (Mercado Pago).\n\n" +
+          "Seu pagamento com cartão de débito pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
+        fraseHtml:
+          "Seu pagamento com <strong>cartão de débito</strong> pelo Mercado Pago foi <strong>aprovado</strong>. Sua inscrição já está na <strong>lista oficial</strong>.",
+      };
+    }
+    if (ptId === "ticket" || pmId.indexOf("bol") === 0) {
+      return {
+        chipLabel: "Boleto",
+        chipCor: "#5b4b8a",
+        txt:
+          "Meio: boleto (Mercado Pago).\n\n" +
+          "Seu pagamento com boleto pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
+        fraseHtml:
+          "Seu <strong>boleto</strong> foi compensado pelo Mercado Pago e o pagamento está <strong>confirmado</strong>. Sua inscrição já está na <strong>lista oficial</strong>.",
+      };
+    }
+    return {
+      chipLabel: "Mercado Pago",
+      chipCor: "#009ee3",
+      txt:
+        "Meio: Mercado Pago.\n\n" +
+        "Seu pagamento pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
+      fraseHtml:
+        "Seu pagamento pelo <strong>Mercado Pago</strong> foi <strong>confirmado</strong>. Sua inscrição já está na <strong>lista oficial</strong> do evento.",
+    };
+  }
+  if (status.indexOf("mercado") !== -1) {
+    return {
+      chipLabel: "Mercado Pago",
+      chipCor: "#009ee3",
+      txt:
+        "Meio: Mercado Pago.\n\n" +
+        "Seu pagamento pelo Mercado Pago foi confirmado e sua inscrição está na lista oficial do evento.",
+      fraseHtml:
+        "Seu pagamento pelo <strong>Mercado Pago</strong> foi <strong>confirmado</strong>. Sua inscrição já está na <strong>lista oficial</strong>.",
+    };
+  }
+  return {
+    chipLabel: "Confirmado",
+    chipCor: "#0d7a4f",
+    txt: "Seu pagamento foi confirmado e sua inscrição está na lista oficial do evento.",
+    fraseHtml:
+      "Seu pagamento foi <strong>confirmado</strong>. Sua inscrição já está na <strong>lista oficial</strong> do evento.",
+  };
+}
+
+/**
  * Envia e-mail ao inscrito quando o pagamento MP é confirmado (webhook).
+ * payJsonOpcional: objeto do pagamento MP (GET /v1/payments) para personalizar PIX vs cartão etc.
  * 1ª vez: o Apps Script pedirá permissão para enviar e-mail. Limite diário do Gmail se aplicam.
  */
-function enviarEmailPagamentoConfirmado(rowData) {
+function enviarEmailPagamentoConfirmado(rowData, payJsonOpcional) {
   if (!rowData || !rowData.length) {
     Logger.log("enviarEmailPagamentoConfirmado: rowData indefinido/vazio");
     return;
@@ -730,16 +983,26 @@ function enviarEmailPagamentoConfirmado(rowData) {
   var valor = rowData[10];
   var formaPagamento = String(rowData[11] || "").trim();
   var statusPagamento = String(rowData[COL_IX_STATUS] || "").trim();
+  var det = detalheConfirmacaoPagamentoParaTemplate(rowData, payJsonOpcional);
   var waLink = "https://wa.me/" + String(WHATSAPP_ORGANIZACAO_EMAIL || "").replace(/\D/g, "");
   var logoHtml = "";
   if (String(LOGO_EMAIL_URL || "").trim()) {
     logoHtml =
-      '<p style="margin:0 0 12px;text-align:center;">' +
+      '<p style="margin:0 0 20px;text-align:center;">' +
       '<img src="' +
       escapeHtmlEmail(LOGO_EMAIL_URL) +
-      '" alt="Logo do evento" style="max-width:180px;height:auto;border:0;"/>' +
+      '" alt="Logo do evento" style="max-width:200px;height:auto;border:0;display:inline-block;"/>' +
       "</p>";
   }
+  var logoRow = logoHtml
+    ? '<tr><td style="padding:24px 28px 0;text-align:center;background:#ffffff;">' + logoHtml + "</td></tr>"
+    : "";
+  var chipHtml =
+    '<span style="display:inline-block;margin-top:4px;padding:8px 18px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ffffff;background:' +
+    det.chipCor +
+    ';">' +
+    escapeHtmlEmail(det.chipLabel) +
+    "</span>";
 
   var valorFmt = "";
   if (valor !== "" && valor !== null && valor !== undefined) {
@@ -755,7 +1018,8 @@ function enviarEmailPagamentoConfirmado(rowData) {
     "Olá" +
     (nome ? " " + nome : "") +
     ",\n\n" +
-    "Seu pagamento foi confirmado e sua inscrição está na lista oficial do evento.\n\n" +
+    det.txt +
+    "\n\n" +
     "Resumo da inscrição:\n" +
     "- Protocolo: " +
     (proto || "—") +
@@ -807,85 +1071,101 @@ function enviarEmailPagamentoConfirmado(rowData) {
     "— Organização";
 
   var htmlBody =
-    '<div style="font-family:Arial,sans-serif;background:#f5f8fa;padding:24px;">' +
-    '<div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #d7e3ea;border-radius:12px;overflow:hidden;">' +
-    '<div style="background:linear-gradient(90deg,#004C74,#00BEE2);padding:18px 24px;color:#fff;">' +
-    '<h1 style="margin:0;font-size:22px;line-height:1.2;">Inscricao confirmada</h1>' +
-    '<p style="margin:8px 0 0;font-size:14px;opacity:.95;">' +
-    NOME_EVENTO_EMAIL +
+    '<div style="margin:0;padding:0;background:#dfe8ef;">' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#dfe8ef;font-family:Arial,Helvetica,sans-serif;">' +
+    '<tr><td style="padding:28px 14px;">' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 16px 48px rgba(0,52,84,.15);">' +
+    '<tr><td style="background:linear-gradient(135deg,#003d5c 0%,#005a7a 40%,#00a3c4 100%);padding:30px 26px 28px;text-align:center;color:#ffffff;">' +
+    '<p style="margin:0 0 8px;font-size:11px;letter-spacing:.26em;text-transform:uppercase;opacity:.88;">Inscrição confirmada</p>' +
+    '<h1 style="margin:0;font-size:23px;line-height:1.25;font-weight:700;">Tudo certo — você está na lista oficial</h1>' +
+    '<p style="margin:14px 0 0;font-size:15px;line-height:1.45;opacity:.93;">' +
+    escapeHtmlEmail(NOME_EVENTO_EMAIL) +
     "</p>" +
+    "</td></tr>" +
+    logoRow +
+    '<tr><td style="padding:22px 26px 10px;background:#ffffff;">' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f0fdf4;border:1px solid #86efac;border-radius:16px;">' +
+    '<tr><td style="padding:26px 22px;text-align:center;">' +
+    '<div style="display:inline-block;width:50px;height:50px;line-height:50px;border-radius:50%;background:' +
+    det.chipCor +
+    ';color:#ffffff;font-size:22px;font-weight:bold;">&#10003;</div>' +
+    '<div style="margin-top:14px;">' +
+    chipHtml +
     "</div>" +
-    '<div style="padding:24px;">' +
-    logoHtml +
-    '<p style="margin:0 0 16px;color:#16384a;font-size:15px;">Olá <strong>' +
+    '<p style="margin:20px 0 0;font-size:17px;color:#0f172a;line-height:1.45;">Olá <strong>' +
     escapeHtmlEmail(nome || "atleta") +
-    "</strong>, seu pagamento foi confirmado. Sua inscrição está na lista oficial.</p>" +
-    '<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 18px;">' +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Protocolo</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;font-weight:700;">' +
+    "</strong>,</p>" +
+    '<p style="margin:12px 0 0;font-size:15px;color:#334155;line-height:1.55;">' +
+    det.fraseHtml +
+    "</p>" +
+    "</td></tr></table>" +
+    "</td></tr>" +
+    '<tr><td style="padding:6px 26px 22px;background:#ffffff;">' +
+    '<p style="margin:0 0 14px;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#64748b;">Seus dados</p>' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;width:38%;font-size:13px;color:#64748b;background:#f8fafc;">Protocolo</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;font-weight:700;">' +
     escapeHtmlEmail(proto || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Nome</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">Nome</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">' +
     escapeHtmlEmail(nome || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">E-mail</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">E-mail</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">' +
     escapeHtmlEmail(email || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Cidade</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">Cidade</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">' +
     escapeHtmlEmail(cidade || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Camisa</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">Camisa</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">' +
     escapeHtmlEmail(camisa || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Percurso</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">Percurso</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">' +
     escapeHtmlEmail(percurso || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Lote</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">Lote</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">' +
     escapeHtmlEmail(loteNome || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Valor</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;font-weight:700;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">Valor</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;font-weight:700;">' +
     escapeHtmlEmail(valorFmt || "—") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#456;">Forma de pagamento</td><td style="padding:9px 10px;border-bottom:1px solid #e5eef3;color:#123;">' +
+    '<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#64748b;background:#f8fafc;">Forma de pagamento</td><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#0f172a;">' +
     escapeHtmlEmail(formaPagamento || "Mercado Pago") +
     "</td></tr>" +
-    '<tr><td style="padding:9px 10px;color:#456;">Status</td><td style="padding:9px 10px;color:#0b5f3b;font-weight:700;">' +
+    '<tr><td style="padding:11px 14px;font-size:13px;color:#64748b;background:#f8fafc;">Status</td><td style="padding:11px 14px;font-size:14px;color:#047857;font-weight:700;">' +
     escapeHtmlEmail(statusPagamento || "Pago (Mercado Pago)") +
     "</td></tr>" +
     "</table>" +
-    '<div style="background:#f7fcff;border:1px solid #dceef7;border-radius:10px;padding:14px 16px;margin-bottom:14px;">' +
-    '<p style="margin:0 0 8px;color:#0d3a55;font-weight:700;">Informacoes do evento</p>' +
-    '<p style="margin:0;color:#1a4f6a;font-size:14px;line-height:1.6;">' +
+    "</td></tr>" +
+    '<tr><td style="padding:0 26px 22px;background:#ffffff;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(180deg,#f0f9ff 0%,#e0f2fe 100%);border:1px solid #bae6fd;border-radius:14px;">' +
+    '<tr><td style="padding:18px 18px 16px;">' +
+    '<p style="margin:0 0 10px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#0369a1;">Evento</p>' +
+    '<p style="margin:0;font-size:14px;line-height:1.65;color:#0c4a6e;">' +
     "<strong>Data:</strong> " +
-    DATA_EVENTO_EMAIL +
-    "<br/>" +
-    "<strong>Horario:</strong> " +
-    HORARIO_EVENTO_EMAIL +
-    "<br/>" +
-    "<strong>Local:</strong> " +
+    escapeHtmlEmail(DATA_EVENTO_EMAIL) +
+    "<br/><strong>Horário:</strong> " +
+    escapeHtmlEmail(HORARIO_EVENTO_EMAIL) +
+    "<br/><strong>Local:</strong> " +
     escapeHtmlEmail(LOCAL_EVENTO_EMAIL) +
     "</p>" +
-    "</div>" +
-    '<p style="margin:0 0 14px;color:#355264;font-size:13px;">Guarde este e-mail e seu protocolo para qualquer consulta.</p>' +
-    '<p style="margin:0 0 8px;text-align:center;">' +
+    "</td></tr></table>" +
+    "</td></tr>" +
+    '<tr><td style="padding:0 26px 26px;background:#ffffff;text-align:center;">' +
+    '<p style="margin:0 0 16px;font-size:13px;color:#475569;line-height:1.5;">Guarde este e-mail e o <strong>protocolo</strong> para qualquer dúvida.</p>' +
     '<a href="' +
     escapeHtmlEmail(waLink) +
-    '" style="display:inline-block;background:#128c7e;color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:10px 16px;border-radius:8px;">Falar com a organização no WhatsApp</a>' +
-    "</p>" +
-    '<p style="margin:0;text-align:center;font-size:12px;color:#5a7889;">' +
-    'Instagram: <a href="' +
+    '" style="display:inline-block;background:#128c7e;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 22px;border-radius:999px;">Falar com a organização no WhatsApp</a>' +
+    '<p style="margin:18px 0 0;font-size:12px;color:#64748b;">Instagram: <a href="' +
     escapeHtmlEmail(INSTAGRAM_ORGANIZACAO_URL) +
-    '" style="color:#004c74;text-decoration:none;">' +
+    '" style="color:#0369a1;text-decoration:none;">' +
     escapeHtmlEmail(INSTAGRAM_ORGANIZACAO_URL) +
-    "</a>" +
-    "</p>" +
-    "</div>" +
-    '<div style="padding:12px 24px;background:#f2f7fa;color:#5a7889;font-size:12px;">Organizacao — ' +
-    NOME_EVENTO_EMAIL +
-    "</div>" +
-    "</div>" +
-    "</div>";
+    "</a></p>" +
+    "</td></tr>" +
+    '<tr><td style="padding:16px 26px;background:#f1f5f9;border-top:1px solid #e2e8f0;text-align:center;font-size:12px;color:#64748b;line-height:1.5;">' +
+    escapeHtmlEmail(NOME_EVENTO_EMAIL) +
+    "<br/>Organização do evento</td></tr>" +
+    "</table></td></tr></table></div>";
   try {
-    MailApp.sendEmail({
+    enviarMailAppComRemetente({
       to: email,
       subject: "Inscrição confirmada — " + NOME_EVENTO_EMAIL,
       body: corpoTexto,
@@ -901,7 +1181,7 @@ function enviarEmailPagamentoConfirmado(rowData) {
  * Execute esta função no editor Apps Script para validar template e permissões do MailApp.
  */
 function testeEnvioEmailPagamentoConfirmado() {
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var ss = obterPlanilhaCorridaOuErro();
   var main = obterAbaInscricoes(ss);
   if (!main) throw new Error("Aba principal não encontrada.");
   garantirCabecalhosPlanilha(main);
@@ -950,14 +1230,14 @@ function processarNotificacaoPagamentoMercadoPago(paymentId) {
     return;
   }
 
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
-  var pend = obterAbaPendentes(ss);
-  garantirCabecalhosPlanilha(pend);
-  var rowIndex = encontrarLinhaPorProtocolo(pend, ref);
-  if (rowIndex < 0) {
+  var ss = obterPlanilhaCorridaOuErro();
+  var achadoMp = encontrarProtocoloNasAbasPendentes(ss, ref);
+  if (!achadoMp) {
     Logger.log("Protocolo pendente não encontrado: " + ref);
     return;
   }
+  var pend = achadoMp.sheet;
+  var rowIndex = achadoMp.rowIndex;
 
   var main = obterAbaInscricoes(ss);
   if (!main) return;
@@ -977,7 +1257,7 @@ function processarNotificacaoPagamentoMercadoPago(paymentId) {
 
   main.appendRow(rowData);
   pend.deleteRow(rowIndex);
-  enviarEmailPagamentoConfirmado(rowData);
+  enviarEmailPagamentoConfirmado(rowData, pay);
   sincronizarBackupSegurancaNoDrive();
 }
 
@@ -1195,7 +1475,7 @@ function validarAprovadorAutorizado() {
  * Útil quando a Web App antiga ainda gravou presencial na aba principal.
  */
 function migrarPresenciaisPendentesParaAbaPendentes() {
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var ss = obterPlanilhaCorridaOuErro();
   var main = obterAbaInscricoes(ss);
   var pend = obterAbaPendentes(ss);
   if (!main || !pend) return { ok: false, error: "Abas não encontradas." };
@@ -1254,14 +1534,12 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
     return { ok: false, error: autorizacao.error };
   }
 
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var ss = obterPlanilhaCorridaOuErro();
   var main = obterAbaInscricoes(ss);
-  var pend = obterAbaPendentes(ss);
   if (!main) {
     return { ok: false, error: "Aba principal de inscrições não encontrada." };
   }
   garantirCabecalhosPlanilha(main);
-  garantirCabecalhosPlanilha(pend);
 
   var rowMain = encontrarLinhaPorProtocolo(main, p);
   if (rowMain > 0) {
@@ -1277,12 +1555,14 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
     return { ok: true, protocolo: p, statusAnterior: statusMain || "—", statusNovo: novoStatusMain, atualizado: true };
   }
 
-  var rowPend = encontrarLinhaPorProtocolo(pend, p);
-  if (rowPend < 0) {
+  var achadoPres = encontrarProtocoloNasAbasPendentes(ss, p);
+  if (!achadoPres) {
     return { ok: false, error: "Protocolo não encontrado.", protocolo: p };
   }
+  var sheetPend = achadoPres.sheet;
+  var rowPend = achadoPres.rowIndex;
 
-  var rowData = pend.getRange(rowPend, 1, 1, CABECALHOS.length).getValues()[0];
+  var rowData = sheetPend.getRange(rowPend, 1, 1, CABECALHOS.length).getValues()[0];
   while (rowData.length < CABECALHOS.length) {
     rowData.push("");
   }
@@ -1294,7 +1574,7 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
     main.appendRow(rowData);
     enviarEmailPagamentoConfirmado(rowData);
   }
-  pend.deleteRow(rowPend);
+  sheetPend.deleteRow(rowPend);
   sincronizarBackupSegurancaNoDrive();
   return { ok: true, protocolo: p, statusAnterior: statusPend || "—", statusNovo: novoStatus, atualizado: true };
 }
@@ -1333,12 +1613,20 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    var ss = SpreadsheetApp.openById(ID_PLANILHA);
+    var ss = obterPlanilhaCorridaOuErro();
     var sheet = obterAbaInscricoes(ss);
     if (!sheet) {
-      throw new Error("Nenhuma aba encontrada na planilha.");
+      throw new Error(
+        "Nenhuma aba válida para a lista oficial. Crie/renomeie uma aba para \"Lista de inscritos\" (confirmados) " +
+          "e mantenha a fila de pendentes com outro nome (ex.: \"" +
+          NOME_ABA_PENDENTES +
+          "\" ou \"Pendentes\")."
+      );
     }
     garantirCabecalhosPlanilha(sheet);
+    var abaPendInscricao = obterAbaPendentes(ss);
+    assertAbasInscricaoDistintas(sheet, abaPendInscricao);
+    garantirCabecalhosPlanilha(abaPendInscricao);
 
     data.mercadoPago = data.mercadoPago === true || String(data.mercadoPago || "").toLowerCase() === "true";
 
@@ -1371,17 +1659,33 @@ function doPost(e) {
       ).setMimeType(ContentService.MimeType.JSON);
     }
 
-    if (String(data.lote).trim() === ID_LOTE_PROMO) {
-      var ja = contarInscricoesLoteTotal(ss, ID_LOTE_PROMO);
-      if (ja >= LIMITE_LOTE_PROMO) {
-        return ContentService.createTextOutput(
-          JSON.stringify({
-            ok: false,
-            error: "Lote promocional esgotado (limite de " + LIMITE_LOTE_PROMO + " inscrições).",
-          })
-        ).setMimeType(ContentService.MimeType.JSON);
+    var loteAjustadoAutomatico = false;
+    var loteEfetivo = String(data.lote || "").trim();
+
+    if (loteEfetivo === ID_LOTE_PROMO) {
+      var jaPromo = contarInscricoesLoteTotal(ss, ID_LOTE_PROMO);
+      if (jaPromo >= LIMITE_LOTE_PROMO) {
+        var jaRegCheio = contarInscricoesLoteTotal(ss, ID_LOTE_REGULAR);
+        if (jaRegCheio >= LIMITE_LOTE_REGULAR) {
+          return ContentService.createTextOutput(
+            JSON.stringify({
+              ok: false,
+              error:
+                "Lotes esgotados: o promocional já encerrou e o lote regular também atingiu o limite de " +
+                LIMITE_LOTE_REGULAR +
+                " inscrições.",
+            })
+          ).setMimeType(ContentService.MimeType.JSON);
+        }
+        data.lote = ID_LOTE_REGULAR;
+        data.loteNome = "Lote regular";
+        data.valorReais = VALOR_LOTE_REGULAR_REAIS;
+        loteEfetivo = ID_LOTE_REGULAR;
+        loteAjustadoAutomatico = true;
       }
-    } else if (String(data.lote).trim() === ID_LOTE_REGULAR) {
+    }
+
+    if (loteEfetivo === ID_LOTE_REGULAR) {
       var jaReg = contarInscricoesLoteTotal(ss, ID_LOTE_REGULAR);
       if (jaReg >= LIMITE_LOTE_REGULAR) {
         return ContentService.createTextOutput(
@@ -1394,10 +1698,15 @@ function doPost(e) {
     }
 
     var out = { ok: true };
+    if (loteAjustadoAutomatico) {
+      out.loteAjustadoAutomatico = true;
+      out.lote = data.lote;
+      out.loteNome = data.loteNome;
+      out.valorReais = data.valorReais;
+    }
 
     if (data.mercadoPago) {
-      var pend = obterAbaPendentes(ss);
-      garantirCabecalhosPlanilha(pend);
+      var pend = abaPendInscricao;
       var rowPend = montarLinhaInscricao(data, "Aguardando pagamento online");
       pend.appendRow(rowPend);
 
@@ -1431,8 +1740,7 @@ function doPost(e) {
       }
     } else {
       var row = montarLinhaInscricao(data, "Pendente (PIX via WhatsApp)");
-      var pendPresencial = obterAbaPendentes(ss);
-      garantirCabecalhosPlanilha(pendPresencial);
+      var pendPresencial = abaPendInscricao;
       pendPresencial.appendRow(row);
       sincronizarBackupSegurancaNoDrive();
       enviarEmailInscricaoRecebida(row);
@@ -1503,7 +1811,7 @@ function doGet(e) {
 }
 
 function colocarCabecalhosNaPlanilha() {
-  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var ss = obterPlanilhaCorridaOuErro();
   var sheet = obterAbaInscricoes(ss);
   if (!sheet) throw new Error("Aba não encontrada.");
   if (sheet.getRange("A1").getValue() !== "") {
@@ -1568,7 +1876,7 @@ function testarEnvioEmailAplicacao() {
     "</strong></p>" +
     "</div></div></div>";
 
-  MailApp.sendEmail({
+  enviarMailAppComRemetente({
     to: destino,
     subject: assunto,
     body: corpoTexto,

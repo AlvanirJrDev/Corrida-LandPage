@@ -15,7 +15,7 @@
  * Pagamento online + consulta de inscrição: webhookUrl = URL da Web App (/exec). O google-apps-script.gs tem WEB_APP_URL_FALLBACK igual a ela;
  * opcionalmente defina WEB_APP_URL nas Propriedades do script para sobrescrever.
  */
-var MODO_TESTE = true;
+var MODO_TESTE = false;
 
 var PRECO_PROMO = MODO_TESTE ? 1 : 50;
 var PRECO_REGULAR = MODO_TESTE ? 1 : 55;
@@ -54,7 +54,7 @@ window.CORRIDA_CONFIG = {
   /**
    * Lotes ativos:
    * - Promo: 50 camisas (R$ 1,00 no teste | R$ 50,00 em produção)
-   * - Regular: 150 camisas (R$ 1,00 no teste | R$ 55,00 em produção)
+   * - Regular: 100 camisas (R$ 1,00 no teste | R$ 55,00 em produção)
    * Alinhar com google-apps-script.gs (IDs, valores e limites).
    */
   lotes: [
@@ -73,10 +73,10 @@ window.CORRIDA_CONFIG = {
       nome: "Lote regular",
       valorReais: PRECO_REGULAR,
       descricao:
-        "Após o promocional: 150 camisas por R$ " +
+        "Após o promocional: 100 camisas por R$ " +
         PRECO_REGULAR.toFixed(2).replace(".", ",") +
         (MODO_TESTE ? " (modo teste)." : "."),
-      limite: 150,
+      limite: 100,
     },
   ],
 
