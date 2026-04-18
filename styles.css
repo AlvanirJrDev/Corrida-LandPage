@@ -126,6 +126,19 @@ a:hover {
   max-width: 680px;
 }
 
+.sobre-arte {
+  margin: 2rem 0 0;
+}
+
+.sobre-arte img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border);
+}
+
 /* Nav + Hero */
 .hero {
   background: linear-gradient(180deg, #fff 0%, var(--color-bg) 100%);
@@ -445,6 +458,20 @@ a:hover {
 /* Why participate */
 .section--beneficios {
   padding-top: 0;
+}
+
+.beneficios-arte {
+  margin: 1.25rem auto 2rem;
+  max-width: min(560px, 100%);
+}
+
+.beneficios-arte img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border);
 }
 
 .benefits-grid {
