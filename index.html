@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,600&family=Racing+Sans+One&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <div class="urgency-bar" role="region" aria-label="Aviso de vagas">
@@ -332,7 +332,7 @@
           <span class="section__eyebrow">Apoio</span>
           <h2 class="section__title">Quem apoia a Corrida Mariana</h2>
           <p class="sponsors-intro__text">
-            Parceiros que fortalecem o evento e os projetos do <strong>ECC</strong> e do <strong>EJC</strong> em Sanharó. Esporte, fé e comunidade andam juntos — e ainda há espaço para <strong>sua marca</strong> aparecer neste mosaico de quem acredita na causa.
+            Parceiros que fortalecem o evento e os projetos do <strong>ECC</strong> e do <strong>EJC</strong> em Sanharó. A marca aparece com <strong>destaque nesta página</strong>, além de kit, peças de divulgação e presença no dia da corrida — conforme cada acordo com a organização.
           </p>
           <p class="sponsors-invite">
             <span class="sponsors-invite__inner">
@@ -342,23 +342,63 @@
           </p>
         </div>
 
-        <!--
-          Logos: coloque PNG/SVG em assets/ e troque um <li class="sponsor-slot sponsor-slot--empty"> por:
-          <li class="sponsor-slot"><a href="URL" target="_blank" rel="noopener noreferrer"><img src="assets/arquivo.png" alt="Nome da empresa" width="200" height="80" loading="lazy" /></a></li>
-        -->
+        <!-- Novo patrocinador: adicione <li class="sponsor-tile"> na vitrine ou <li class="sponsor-slot sponsor-slot--empty"> nas vagas. -->
 
         <div class="sponsors-wall">
-          <p class="sponsors-wall__thanks" role="presentation">Nossos parceiros</p>
-          <ul class="sponsors-grid" role="list">
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
-            <li class="sponsor-slot sponsor-slot--empty" aria-label="Espaço para logo do patrocinador"><span class="sponsor-slot__hint">Sua marca aqui</span></li>
+          <header class="sponsors-wall__header">
+            <p class="sponsors-wall__badge">Patrocínio em destaque</p>
+            <h3 class="sponsors-wall__thanks">Quem já apoia</h3>
+          </header>
+
+          <ul class="sponsors-showcase" role="list" aria-label="Patrocinadores atuais">
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-dr-ana-beatriz-freitas.png" alt="Dr. Ana Beatriz Freitas" width="240" height="110" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Dr. Ana Beatriz Freitas</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-oticas-neide.png" alt="Óticas Neide — 25 anos" width="240" height="110" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Óticas Neide</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-du-cell.png" alt="Du Cell" width="240" height="110" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Du Cell</span>
+            </li>
           </ul>
+
+          <div class="sponsors-vacancies">
+            <div class="sponsors-vacancies__intro" aria-labelledby="sponsors-vacancies-heading">
+              <h3 id="sponsors-vacancies-heading" class="sponsors-vacancies__title">Ainda há espaço para sua marca</h3>
+              <p class="sponsors-vacancies__hint">Logotipo na vitrine, kit e divulgação — combinamos com a organização.</p>
+            </div>
+            <ul class="sponsors-grid sponsors-grid--vacancies" role="list">
+              <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
+                <span class="sponsor-slot__plus" aria-hidden="true">+</span>
+                <span class="sponsor-slot__hint">Sua marca</span>
+              </li>
+              <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
+                <span class="sponsor-slot__plus" aria-hidden="true">+</span>
+                <span class="sponsor-slot__hint">Sua marca</span>
+              </li>
+              <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
+                <span class="sponsor-slot__plus" aria-hidden="true">+</span>
+                <span class="sponsor-slot__hint">Sua marca</span>
+              </li>
+              <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
+                <span class="sponsor-slot__plus" aria-hidden="true">+</span>
+                <span class="sponsor-slot__hint">Sua marca</span>
+              </li>
+              <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
+                <span class="sponsor-slot__plus" aria-hidden="true">+</span>
+                <span class="sponsor-slot__hint">Sua marca</span>
+              </li>
+            </ul>
+          </div>
         </div>
 
         <div class="sponsors-cta">
