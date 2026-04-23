@@ -18,6 +18,7 @@
  * (3) Implantar → Gerenciar implantações → Nova versão na Web App.
  *
  * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca na lista oficial e em abas de pendentes (nomes reservados) e em qualquer outra aba que tenha o cabeçalho padrão (linha 1, coluna "Protocolo").
+ * Alterar forma de pagamento (só se ainda não pago): POST { "tipo": "alterar_forma_pagamento", "email", "telefone", "protocolo", "novaForma": "mercado_pago_online" | "presencial_secretaria", "urlRetorno"?, "useSandbox"? } — atualiza colunas na planilha; para online devolve checkoutUrl.
  *
  * PIX via WhatsApp: fila de pendentes até aprovar pelo GET /exec?protocolo=…&senha=… — status "Pago (presencial confirmado)" + e-mail.
  *
@@ -111,6 +112,8 @@ var COL_IX_NOME = 2;
 var COL_IX_STATUS = 12;
 /** Coluna com fórmula HYPERLINK para aprovação GET (PIX pendente). */
 var COL_IX_LINK_APROVACAO = 13;
+/** Coluna "Forma pagamento" (texto exibido na planilha). */
+var COL_IX_FORMA = 11;
 
 var CABECALHOS = [
   "Data",
@@ -203,8 +206,38 @@ function classificarStatusPagamento(status) {
   if (s.indexOf("aguardando") !== -1) return "nao_pago";
   if (s.indexOf("pendente") !== -1) return "nao_pago";
   if (s.indexOf("não pago") !== -1 || s.indexOf("nao pago") !== -1) return "nao_pago";
+  if (s.indexOf("análise") !== -1 || s.indexOf("analise") !== -1) return "nao_pago";
+  if (s.indexOf("processando") !== -1) return "nao_pago";
   if (s.indexOf("pago") !== -1) return "pago";
   return "desconhecido";
+}
+
+/**
+ * Pode exibir / permitir troca de forma: status claramente em aberto, ou inscrição na fila de pendentes sem status "pago".
+ */
+function inscricaoPermiteAlterarFormaPagamento(stTexto, origem) {
+  var cls = classificarStatusPagamento(stTexto);
+  if (cls === "pago") return false;
+  if (cls === "nao_pago") return true;
+  if (origem === "pendente_fila") return true;
+  return false;
+}
+
+/**
+ * Alinha com os rótulos do site (inscricao.js): mercado_pago_online | presencial_secretaria | "".
+ */
+function inferirCodigoFormaPagamentoLinha(row) {
+  if (!row || !row.length) return "";
+  var st = String(row[COL_IX_STATUS] || "").toLowerCase();
+  var fp = String(row[COL_IX_FORMA] || "").toLowerCase();
+  if (st.indexOf("aguardando") !== -1) return "mercado_pago_online";
+  if (st.indexOf("pendente (pix") !== -1 || (st.indexOf("pendente") !== -1 && st.indexOf("pix") !== -1))
+    return "presencial_secretaria";
+  if (fp.indexOf("mercado pago") !== -1 && fp.indexOf("online") !== -1) return "mercado_pago_online";
+  if (fp.indexOf("mercado pago") !== -1) return "mercado_pago_online";
+  if (fp.indexOf("pix") !== -1 || fp.indexOf("whatsapp") !== -1 || fp.indexOf("secretaria") !== -1)
+    return "presencial_secretaria";
+  return "";
 }
 
 function linhaCombinaEmailOuTelefone(row, email, telDigits) {
@@ -684,8 +717,9 @@ function listarAbasParaBuscaInscricao(ss) {
 
 /**
  * Busca inscrição na lista principal ou em pendentes — exige e-mail + telefone (mesmos da inscrição; telefone comparado só com dígitos).
+ * Retorna aba, índice da linha (1-based) e linha de valores para atualização na planilha.
  */
-function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
+function buscarInscricaoPorEmailETelefoneComLocal(ss, email, telefoneDigitos) {
   var em = String(email || "")
     .trim()
     .toLowerCase();
@@ -708,10 +742,16 @@ function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
       if (String(row[COL_IX_EMAIL]).trim().toLowerCase() !== em) continue;
       if (!telefonesIguaisBR(row[COL_IX_TELEFONE], td)) continue;
       var origem = mainB && sheet.getSheetId() === mainB.getSheetId() ? "lista_oficial" : "pendente_fila";
-      return { row: row, origem: origem };
+      return { sheet: sheet, rowIndex: i + 1, row: row, origem: origem };
     }
   }
   return null;
+}
+
+function buscarInscricaoPorEmailETelefone(ss, email, telefoneDigitos) {
+  var loc = buscarInscricaoPorEmailETelefoneComLocal(ss, email, telefoneDigitos);
+  if (!loc) return null;
+  return { row: loc.row, origem: loc.origem };
 }
 
 function linhaParaRespostaConsulta(row, origem) {
@@ -745,6 +785,7 @@ function linhaParaRespostaConsulta(row, origem) {
     formaPagamento: String(row[11] || "").trim(),
     statusPagamento: String(row[COL_IX_STATUS] || "").trim(),
     situacaoLista: situacaoLista,
+    origemConsulta: origem,
     /** Alinhado aos e-mails (NOME_EVENTO_EMAIL, DATA_EVENTO_EMAIL, …) para exibir na consulta pública. */
     nomeEvento: NOME_EVENTO_EMAIL,
     dataEvento: DATA_EVENTO_EMAIL,
@@ -911,6 +952,143 @@ function exportarBackupJsonParaDrive() {
   return file.getUrl();
 }
 
+function linhaPlanilhaParaPayloadMp(row, urlRetorno, useSandbox) {
+  var vr = row[10];
+  if (typeof vr === "string") {
+    vr = parseFloat(String(vr).replace(/[^\d.,]/g, "").replace(",", "."));
+    if (isNaN(vr)) vr = 0;
+  } else {
+    vr = Number(vr);
+    if (isNaN(vr)) vr = 0;
+  }
+  return {
+    protocolo: String(row[COL_IX_PROTOCOLO] || "").trim(),
+    nome: String(row[COL_IX_NOME] || "").trim(),
+    email: String(row[COL_IX_EMAIL] || "").trim(),
+    telefone: String(row[COL_IX_TELEFONE] || "").trim(),
+    cidade: String(row[5] || "").trim(),
+    camisa: String(row[6] || "").trim(),
+    percurso: String(row[7] || "").trim(),
+    lote: String(row[COL_IX_LOTE] || "").trim(),
+    loteNome: String(row[9] || "").trim(),
+    valorReais: vr,
+    evento: NOME_EVENTO_EMAIL,
+    mercadoPago: true,
+    urlRetorno: urlRetorno,
+    useSandbox: useSandbox === true,
+  };
+}
+
+/**
+ * Atualiza forma/status na linha encontrada por e-mail+telefone, com protocolo como confirmação.
+ * Só permite enquanto o pagamento não estiver confirmado (mesma regra da consulta).
+ */
+function executarAlterarFormaPagamento(data) {
+  var email = String(data.email || "")
+    .trim()
+    .toLowerCase();
+  var tel = data.telefone != null ? String(data.telefone) : "";
+  var protocolo = String(data.protocolo || "").trim();
+  var novaForma = String(data.novaForma || "").trim();
+  if (!email || !tel || !protocolo) {
+    return { ok: false, error: "Informe e-mail, telefone e protocolo." };
+  }
+  if (novaForma !== "mercado_pago_online" && novaForma !== "presencial_secretaria") {
+    return { ok: false, error: "Forma de pagamento inválida." };
+  }
+  if (soDigitos(tel).length < 10) {
+    return { ok: false, error: "Telefone inválido: use DDD + número." };
+  }
+
+  var ss;
+  try {
+    ss = obterPlanilhaCorridaOuErro();
+  } catch (err0) {
+    return { ok: false, error: String(err0) };
+  }
+
+  var achado = buscarInscricaoPorEmailETelefoneComLocal(ss, email, tel);
+  if (!achado) {
+    return { ok: false, error: "Inscrição não encontrada com este e-mail e telefone." };
+  }
+
+  var protoLinha = String(achado.row[COL_IX_PROTOCOLO] || "").trim();
+  if (!protoLinha || protoLinha !== protocolo) {
+    return { ok: false, error: "O protocolo não confere com o e-mail e telefone informados." };
+  }
+
+  var stAtual = String(achado.row[COL_IX_STATUS] || "").trim();
+  if (!inscricaoPermiteAlterarFormaPagamento(stAtual, achado.origem)) {
+    return {
+      ok: false,
+      error:
+        "Não é possível alterar: o pagamento já foi confirmado ou o status não permite mudança automática pela consulta.",
+    };
+  }
+
+  var codAtual = inferirCodigoFormaPagamentoLinha(achado.row);
+  if (codAtual && novaForma === codAtual) {
+    return { ok: false, error: "Essa já é a forma de pagamento registrada na sua inscrição." };
+  }
+
+  var sheet = achado.sheet;
+  var rowIndex = achado.rowIndex;
+  var urlRetorno = String(data.urlRetorno || "").trim();
+  var useSandbox = data.useSandbox === true || String(data.useSandbox || "").toLowerCase() === "true";
+
+  if (novaForma === "presencial_secretaria") {
+    sheet.getRange(rowIndex, COL_IX_FORMA + 1).setValue("PIX via WhatsApp");
+    sheet.getRange(rowIndex, COL_IX_STATUS + 1).setValue("Pendente (PIX via WhatsApp)");
+    aplicarLinkAprovacaoPixGarantido(sheet, rowIndex, protocolo);
+    aplicarCorFundoLinhaInscricao(sheet, rowIndex, "Pendente (PIX via WhatsApp)");
+    sincronizarBackupSegurancaNoDrive();
+    return {
+      ok: true,
+      mensagem:
+        "Forma de pagamento atualizada para PIX via WhatsApp. Fale com a organização para receber os dados do PIX.",
+    };
+  }
+
+  var props = PropertiesService.getScriptProperties();
+  var token = props.getProperty("MERCADO_PAGO_ACCESS_TOKEN");
+  if (!token) {
+    return { ok: false, error: "Pagamento online indisponível no servidor (configure MERCADO_PAGO_ACCESS_TOKEN)." };
+  }
+  if (!urlRetorno) {
+    return {
+      ok: false,
+      error:
+        "Falta a URL de retorno do site. Em config.js defina mercadoPago.urlRetorno (HTTPS) e tente de novo.",
+    };
+  }
+
+  var payloadMp = linhaPlanilhaParaPayloadMp(achado.row, urlRetorno, useSandbox);
+  var mpRes;
+  try {
+    mpRes = criarPreferenciaMercadoPago(payloadMp);
+  } catch (mpErr) {
+    return { ok: false, error: "Erro ao falar com o Mercado Pago: " + String(mpErr) };
+  }
+  if (!mpRes.url) {
+    return {
+      ok: false,
+      error: mensagemErroCheckoutMercadoPago(mpRes.erroCodigo) || "Não foi possível gerar o link de pagamento online.",
+    };
+  }
+
+  sheet.getRange(rowIndex, COL_IX_FORMA + 1).setValue("Mercado Pago (pagamento online)");
+  sheet.getRange(rowIndex, COL_IX_STATUS + 1).setValue("Aguardando pagamento online");
+  aplicarLinkAprovacaoPixGarantido(sheet, rowIndex, protocolo);
+  aplicarCorFundoLinhaInscricao(sheet, rowIndex, "Aguardando pagamento online");
+  sincronizarBackupSegurancaNoDrive();
+
+  return {
+    ok: true,
+    checkoutUrl: mpRes.url,
+    mensagem: "Forma de pagamento atualizada. Use o link do Mercado Pago para concluir o pagamento com cartão.",
+  };
+}
+
 function executarConsultaInscricao(data) {
   var email = data.email;
   var tel = data.telefone != null ? data.telefone : data.telefoneDigitos;
@@ -922,7 +1100,7 @@ function executarConsultaInscricao(data) {
     return { ok: false, error: "Telefone inválido: use DDD + número (ex.: (87) 99999-9999)." };
   }
   var ss = obterPlanilhaCorridaOuErro();
-  var achado = buscarInscricaoPorEmailETelefone(ss, email, tel);
+  var achado = buscarInscricaoPorEmailETelefoneComLocal(ss, email, tel);
   if (!achado) {
     return {
       ok: true,
@@ -931,10 +1109,16 @@ function executarConsultaInscricao(data) {
         "Não encontramos inscrição com este e-mail e telefone. Confira se são os mesmos do formulário ou fale com a organização.",
     };
   }
+  var dados = linhaParaRespostaConsulta(achado.row, achado.origem);
+  dados.permiteAlterarFormaPagamento = inscricaoPermiteAlterarFormaPagamento(
+    String(achado.row[COL_IX_STATUS] || "").trim(),
+    achado.origem
+  );
+  dados.formaPagamentoCodigo = inferirCodigoFormaPagamentoLinha(achado.row);
   return {
     ok: true,
     encontrado: true,
-    dados: linhaParaRespostaConsulta(achado.row, achado.origem),
+    dados: dados,
   };
 }
 
@@ -1881,6 +2065,11 @@ function doPost(e) {
     if (data.tipo === "consulta_inscricao") {
       var outConsulta = executarConsultaInscricao(data);
       return ContentService.createTextOutput(JSON.stringify(outConsulta)).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (data.tipo === "alterar_forma_pagamento") {
+      var outAlt = executarAlterarFormaPagamento(data);
+      return ContentService.createTextOutput(JSON.stringify(outAlt)).setMimeType(ContentService.MimeType.JSON);
     }
 
     if (data.tipo === "estado_lotes") {

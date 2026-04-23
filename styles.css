@@ -1671,6 +1671,79 @@ a:hover {
   border-bottom: none;
 }
 
+.consulta-alterar-pag {
+  margin-top: 1.35rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.consulta-alterar-pag__titulo {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-burgundy);
+}
+
+.consulta-alterar-pag__texto {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--color-muted);
+}
+
+.consulta-alterar-pag__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.65rem 0.85rem;
+}
+
+.consulta-alterar-pag__label {
+  flex: 1 1 100%;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.consulta-alterar-pag__select {
+  flex: 1 1 min(220px, 100%);
+  min-height: 2.65rem;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.95rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.consulta-alterar-pag__btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.consulta-alterar-pag__msg {
+  margin-top: 0.85rem;
+  margin-bottom: 0;
+}
+
+.consulta-alterar-pag__msg.consulta-msg--erro {
+  margin-top: 0.85rem;
+}
+
+.consulta-alterar-pag--aviso {
+  background: rgba(0, 59, 91, 0.04);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+}
+
+.consulta-alterar-pag--aviso code {
+  font-size: 0.85em;
+}
+
 /* Inscrição */
 .section--inscricao {
   padding: 3.5rem 0 4rem;

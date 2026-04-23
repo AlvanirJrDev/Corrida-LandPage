@@ -922,6 +922,9 @@
   var btnConsulta = document.getElementById("btn-consulta");
   if (!formConsulta || !resultadoEl) return;
 
+  var ultimaConsultaEmail = "";
+  var ultimaConsultaTel = "";
+
   function apenasDigitosTel(str) {
     return String(str || "").replace(/\D/g, "");
   }
@@ -973,8 +976,67 @@
     }
   }
 
-  function renderDados(d) {
+  function urlWhatsAppConsulta(texto) {
+    var num = (cfg.whatsappNumero || "").replace(/\D/g, "");
+    if (!num) num = "5511999999999";
+    return "https://wa.me/" + num + "?text=" + encodeURIComponent(texto);
+  }
+
+  function montarMensagemMudancaParaPix(dados, email, telFormatado) {
+    var nomeEv = cfg.nomeEvento || "evento";
+    return [
+      "Olá! Consultei minha inscrição na *" + nomeEv + "* e quero mudar para pagamento por *PIX via WhatsApp*.",
+      "",
+      "*Protocolo:* " + (dados.protocolo || "—"),
+      "*Nome:* " + (dados.nome || "—"),
+      "*E-mail:* " + (email || "—"),
+      "*Telefone:* " + (telFormatado || "—"),
+      "",
+      "Antes estava como pagamento online (cartão) no cadastro. Por favor, enviem os dados do PIX por aqui para eu concluir o pagamento. Obrigado(a)!",
+    ].join("\n");
+  }
+
+  /** Espelha google-apps-script.gs (classificarStatusPagamento). */
+  function classificarStatusCliente(status) {
+    var s = String(status || "")
+      .trim()
+      .toLowerCase();
+    if (!s) return "desconhecido";
+    if (s.indexOf("aguardando") !== -1) return "nao_pago";
+    if (s.indexOf("pendente") !== -1) return "nao_pago";
+    if (s.indexOf("não pago") !== -1 || s.indexOf("nao pago") !== -1) return "nao_pago";
+    if (s.indexOf("análise") !== -1 || s.indexOf("analise") !== -1) return "nao_pago";
+    if (s.indexOf("processando") !== -1) return "nao_pago";
+    if (s.indexOf("pago") !== -1) return "pago";
+    return "desconhecido";
+  }
+
+  function situacaoIndicaFilaPendente(d) {
+    var sl = String((d && d.situacaoLista) || "").toLowerCase();
+    return (
+      sl.indexOf("aguardando confirmação do pagamento") !== -1 ||
+      sl.indexOf("aguardando confirmacao do pagamento") !== -1
+    );
+  }
+
+  /** Se o Apps Script for antigo ou o status vier vazio, ainda liberamos na fila de pendentes. */
+  function podeAlterarFormaPagamentoCliente(d) {
     d = d || {};
+    var v = d.permiteAlterarFormaPagamento;
+    if (v === false || v === "false") return false;
+    if (v === true || v === "true") return true;
+    var cls = classificarStatusCliente(d.statusPagamento);
+    if (cls === "pago") return false;
+    if (cls === "nao_pago") return true;
+    if (d.origemConsulta === "pendente_fila") return true;
+    if (situacaoIndicaFilaPendente(d) && cls !== "pago") return true;
+    return false;
+  }
+
+  function renderDados(d, emailConsulta, telConsulta) {
+    d = d || {};
+    ultimaConsultaEmail = emailConsulta ? String(emailConsulta).trim().toLowerCase() : "";
+    ultimaConsultaTel = telConsulta ? String(telConsulta) : "";
     var nomeEv = String(d.nomeEvento || cfg.nomeEvento || "").trim();
     var dataEv = String(d.dataEvento || cfg.dataEvento || "").trim();
     var horaEv = String(d.horarioEvento || cfg.horarioEvento || "").trim();
@@ -1006,9 +1068,134 @@
       );
     });
     parts.push("</dl>");
+
+    var mpAtivo = !!(cfg.mercadoPago && cfg.mercadoPago.ativo);
+    var codAtual = String(d.formaPagamentoCodigo || "").trim();
+    var permite = podeAlterarFormaPagamentoCliente(d);
+    var optsHtml = [];
+    if (permite) {
+      if (mpAtivo && codAtual !== "mercado_pago_online") {
+        optsHtml.push('<option value="mercado_pago_online">Mercado Pago — pagamento online</option>');
+      }
+      if (codAtual !== "presencial_secretaria") {
+        optsHtml.push(
+          '<option value="presencial_secretaria">PIX via WhatsApp (falar com a organização)</option>'
+        );
+      }
+    }
+    if (permite && optsHtml.length > 0) {
+      parts.push(
+        '<div class="consulta-alterar-pag" id="consulta-alterar-pag">' +
+          '<p class="consulta-alterar-pag__titulo">Mudar forma de pagamento</p>' +
+          '<p class="consulta-alterar-pag__texto">Enquanto o pagamento não for confirmado, você pode escolher outra forma. A organização vê a alteração na planilha na hora.</p>' +
+          '<div class="consulta-alterar-pag__row">' +
+          '<label class="consulta-alterar-pag__label" for="consulta-select-nova-forma">Quero pagar assim</label>' +
+          '<select id="consulta-select-nova-forma" class="consulta-alterar-pag__select">' +
+          '<option value="" disabled selected>Escolha…</option>' +
+          optsHtml.join("") +
+          "</select>" +
+          '<button type="button" class="btn btn--secondary consulta-alterar-pag__btn" id="btn-confirmar-alterar-forma">Confirmar alteração</button>' +
+          "</div>" +
+          '<p id="consulta-alterar-msg" class="consulta-msg consulta-alterar-pag__msg" role="status" hidden></p>' +
+          "</div>"
+      );
+    } else if (permite && optsHtml.length === 0) {
+      parts.push(
+        '<div class="consulta-alterar-pag consulta-alterar-pag--aviso" id="consulta-alterar-pag">' +
+          '<p class="consulta-alterar-pag__titulo">Forma de pagamento</p>' +
+          '<p class="consulta-alterar-pag__texto">Sua inscrição ainda não está paga, mas no site não há outra opção agora (ex.: pagamento online desligado no <code>config.js</code> e você já está no PIX). Para mudar como vai pagar, fale no <strong>WhatsApp da organização</strong> com seu protocolo.</p>' +
+          "</div>"
+      );
+    }
+
     resultadoEl.innerHTML = parts.join("");
     resultadoEl.hidden = false;
     resultadoEl.focus();
+
+    var btnAlt = resultadoEl.querySelector("#btn-confirmar-alterar-forma");
+    var selAlt = resultadoEl.querySelector("#consulta-select-nova-forma");
+    var msgAlt = resultadoEl.querySelector("#consulta-alterar-msg");
+    if (!btnAlt || !selAlt || !ultimaConsultaEmail || !ultimaConsultaTel) return;
+
+    btnAlt.addEventListener("click", async function () {
+      if (!msgAlt) return;
+      msgAlt.hidden = true;
+      msgAlt.textContent = "";
+      msgAlt.className = "consulta-msg consulta-alterar-pag__msg";
+
+      var novaForma = selAlt.value;
+      if (!novaForma) {
+        msgAlt.textContent = "Escolha a nova forma de pagamento.";
+        msgAlt.classList.add("consulta-msg--erro");
+        msgAlt.hidden = false;
+        return;
+      }
+
+      var mpCfg = cfg.mercadoPago || {};
+      var urlRetorno = (mpCfg.urlRetorno || "").trim();
+      if (!urlRetorno && typeof window !== "undefined" && window.location) {
+        urlRetorno = window.location.origin + window.location.pathname;
+      }
+
+      btnAlt.disabled = true;
+      var labelOriginal = btnAlt.textContent;
+      btnAlt.textContent = "Salvando…";
+
+      var outAlt = await enviarConsulta({
+        tipo: "alterar_forma_pagamento",
+        email: ultimaConsultaEmail,
+        telefone: ultimaConsultaTel,
+        protocolo: d.protocolo || "",
+        novaForma: novaForma,
+        urlRetorno: urlRetorno,
+        useSandbox: !!mpCfg.useSandbox,
+      });
+
+      btnAlt.disabled = false;
+      btnAlt.textContent = labelOriginal;
+
+      if (!outAlt.ok) {
+        msgAlt.textContent = outAlt.error || "Não foi possível alterar. Tente de novo ou fale no WhatsApp da organização.";
+        msgAlt.classList.add("consulta-msg--erro");
+        msgAlt.hidden = false;
+        return;
+      }
+      if (outAlt.ignored === true) {
+        msgAlt.textContent =
+          "O servidor ainda não tem esta função. No Google Apps Script, cole o código atualizado do arquivo google-apps-script.gs e publique uma nova versão da Web App.";
+        msgAlt.classList.add("consulta-msg--erro");
+        msgAlt.hidden = false;
+        return;
+      }
+      if (novaForma === "mercado_pago_online" && !outAlt.checkoutUrl) {
+        msgAlt.textContent =
+          "Não recebemos o link do Mercado Pago. Confira o token no Apps Script, publique nova versão e tente de novo.";
+        msgAlt.classList.add("consulta-msg--erro");
+        msgAlt.hidden = false;
+        return;
+      }
+
+      if (novaForma === "mercado_pago_online" && outAlt.checkoutUrl) {
+        window.location.href = outAlt.checkoutUrl;
+        return;
+      }
+
+      var refresh = await enviarConsulta({
+        tipo: "consulta_inscricao",
+        email: ultimaConsultaEmail,
+        telefone: ultimaConsultaTel,
+      });
+      var dadosMsg = d;
+      if (refresh.ok && refresh.encontrado && refresh.dados) {
+        dadosMsg = refresh.dados;
+        renderDados(refresh.dados, ultimaConsultaEmail, ultimaConsultaTel);
+      }
+
+      if (novaForma === "presencial_secretaria") {
+        var textoWa = montarMensagemMudancaParaPix(dadosMsg, ultimaConsultaEmail, ultimaConsultaTel);
+        window.open(urlWhatsAppConsulta(textoWa), "_blank", "noopener,noreferrer");
+      }
+    });
   }
 
   async function enviarConsulta(payload) {
@@ -1037,7 +1224,7 @@
         return {
           ok: false,
           error:
-            "Resposta inválida do servidor. No Google Apps Script: salve o código atualizado (função consulta), depois Implantar → Nova versão.",
+            "Resposta inválida do servidor. No Google Apps Script: salve o código atualizado (consulta + alterar_forma_pagamento), depois Implantar → Nova versão.",
         };
       }
       return json;
@@ -1075,7 +1262,7 @@
       return;
     }
     if (out.encontrado && out.dados) {
-      renderDados(out.dados);
+      renderDados(out.dados, email, telRaw);
       return;
     }
     mostrarErro(out.error || "Inscrição não encontrada. Confira e-mail e telefone.");
