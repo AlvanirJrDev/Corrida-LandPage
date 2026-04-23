@@ -34,7 +34,7 @@ window.CORRIDA_CONFIG = {
    */
   /** Mesma URL de Implantar → App da Web (/exec). O script monta ?protocolo=&senha= para o link "Aprovar PIX". */
   webhookUrl:
-    "https://script.google.com/macros/s/AKfycbxL_3csfdYsIsimppYjGf4rK44kRuArvItMUs2miQtVy8FusEVzmwCe-glgNrTAYiBi/exec",
+    "https://script.google.com/macros/s/AKfycbwB8SjUpALax865m_wZxYYQV4BLXbQtBwDRa3B8DBGXrvuRiiwGBcYGT-Kp0PFegf2i/exec",
   /**
    * true = não exige webhookUrl (só abre WhatsApp, sem linha na planilha). Use false em produção.
    */

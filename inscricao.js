@@ -982,18 +982,34 @@
     return "https://wa.me/" + num + "?text=" + encodeURIComponent(texto);
   }
 
-  function montarMensagemMudancaParaPix(dados, email, telFormatado) {
-    var nomeEv = cfg.nomeEvento || "evento";
-    return [
-      "Olá! Consultei minha inscrição na *" + nomeEv + "* e quero mudar para pagamento por *PIX via WhatsApp*.",
+  /**
+   * Mesmo modelo do WhatsApp da inscrição com PIX (montarMensagemWhatsApp no formulário),
+   * usando os dados devolvidos pela consulta após gravar a mudança na planilha.
+   */
+  function mensagemWhatsAppComoInscricaoPix(dadosConsulta, email, tel) {
+    var nomeEvento = cfg.nomeEvento || "Corrida Mariana em prol do ECC e EJC de Sanharó";
+    var valor = String((dadosConsulta && dadosConsulta.valorReais) || "")
+      .trim()
+      .replace(/\s+/g, " ");
+    if (!valor) valor = cfg.valorInscricao || "";
+    var linhas = [
+      "Olá! Segue minha inscrição na *" + nomeEvento + "*.",
       "",
-      "*Protocolo:* " + (dados.protocolo || "—"),
-      "*Nome:* " + (dados.nome || "—"),
+      "*Protocolo:* " + ((dadosConsulta && dadosConsulta.protocolo) || "—"),
+      "*Nome:* " + ((dadosConsulta && dadosConsulta.nome) || "—"),
       "*E-mail:* " + (email || "—"),
-      "*Telefone:* " + (telFormatado || "—"),
+      "*Telefone:* " + (tel || "—"),
+      "*Cidade:* " + ((dadosConsulta && dadosConsulta.cidade) || "—"),
+      "*Tam. camisa:* " + ((dadosConsulta && dadosConsulta.camisa) || "—"),
+      "*Percurso:* " + ((dadosConsulta && dadosConsulta.percurso) || "—"),
+      "*Lote:* " + ((dadosConsulta && dadosConsulta.loteNome) || "—"),
+      "*Forma de pagamento:* PIX via WhatsApp",
       "",
-      "Antes estava como pagamento online (cartão) no cadastro. Por favor, enviem os dados do PIX por aqui para eu concluir o pagamento. Obrigado(a)!",
-    ].join("\n");
+      "Valor da inscrição: " + valor,
+      "",
+      "Quero finalizar minha inscrição. Peço que me enviem os dados do PIX por aqui para eu realizar o pagamento.",
+    ];
+    return linhas.join("\n");
   }
 
   /** Espelha google-apps-script.gs (classificarStatusPagamento). */
@@ -1141,8 +1157,20 @@
       var labelOriginal = btnAlt.textContent;
       btnAlt.textContent = "Salvando…";
 
+      /** Abre aba em branco no clique (antes do await) para o navegador não bloquear o WhatsApp após o fetch. */
+      var waJanela = null;
+      if (novaForma === "presencial_secretaria") {
+        try {
+          waJanela = window.open("about:blank", "_blank");
+        } catch (eWa0) {
+          waJanela = null;
+        }
+      }
+
+      /** Mesmo endpoint da consulta: Web Apps antigas ignoravam tipo "alterar_forma_pagamento" no doPost. */
       var outAlt = await enviarConsulta({
-        tipo: "alterar_forma_pagamento",
+        tipo: "consulta_inscricao",
+        acaoMudarPagamento: "alterar_forma_pagamento",
         email: ultimaConsultaEmail,
         telefone: ultimaConsultaTel,
         protocolo: d.protocolo || "",
@@ -1154,20 +1182,39 @@
       btnAlt.disabled = false;
       btnAlt.textContent = labelOriginal;
 
+      function fecharPlaceholderWa() {
+        if (!waJanela) return;
+        try {
+          waJanela.close();
+        } catch (eWa1) {}
+        waJanela = null;
+      }
+
       if (!outAlt.ok) {
+        fecharPlaceholderWa();
         msgAlt.textContent = outAlt.error || "Não foi possível alterar. Tente de novo ou fale no WhatsApp da organização.";
         msgAlt.classList.add("consulta-msg--erro");
         msgAlt.hidden = false;
         return;
       }
-      if (outAlt.ignored === true) {
+      if (outAlt.ok === true && "encontrado" in outAlt && !outAlt.mensagem && !outAlt.checkoutUrl) {
+        fecharPlaceholderWa();
         msgAlt.textContent =
-          "O servidor ainda não tem esta função. No Google Apps Script, cole o código atualizado do arquivo google-apps-script.gs e publique uma nova versão da Web App.";
+          "O Apps Script ainda não reconhece a mudança de forma de pagamento. No Google Apps Script, cole o google-apps-script.gs completo do repositório (precisa da função executarConsultaInscricao com acaoMudarPagamento), Salve e publique Nova versão na mesma Web App do config.js.";
+        msgAlt.classList.add("consulta-msg--erro");
+        msgAlt.hidden = false;
+        return;
+      }
+      if (outAlt.ignored === true) {
+        fecharPlaceholderWa();
+        msgAlt.textContent =
+          "Resposta inesperada do servidor (ignored). Atualize google-apps-script.gs e o inscricao.js no site; confira se webhookUrl aponta para a Web App certa.";
         msgAlt.classList.add("consulta-msg--erro");
         msgAlt.hidden = false;
         return;
       }
       if (novaForma === "mercado_pago_online" && !outAlt.checkoutUrl) {
+        fecharPlaceholderWa();
         msgAlt.textContent =
           "Não recebemos o link do Mercado Pago. Confira o token no Apps Script, publique nova versão e tente de novo.";
         msgAlt.classList.add("consulta-msg--erro");
@@ -1176,8 +1223,38 @@
       }
 
       if (novaForma === "mercado_pago_online" && outAlt.checkoutUrl) {
+        fecharPlaceholderWa();
         window.location.href = outAlt.checkoutUrl;
         return;
+      }
+
+      if (novaForma === "presencial_secretaria") {
+        var textoWaPix = mensagemWhatsAppComoInscricaoPix(d, ultimaConsultaEmail, ultimaConsultaTel);
+        var waUrlPix = urlWhatsAppConsulta(textoWaPix);
+        if (waJanela) {
+          try {
+            waJanela.location.replace(waUrlPix);
+          } catch (eWa2) {
+            fecharPlaceholderWa();
+            var abWa = window.open(waUrlPix, "_blank", "noopener,noreferrer");
+            if (!abWa) {
+              msgAlt.textContent =
+                "Alteração salva. Se o WhatsApp não abriu, copie o link ou abra manualmente: " + waUrlPix;
+              msgAlt.classList.remove("consulta-msg--erro");
+              msgAlt.hidden = false;
+            }
+          }
+        } else {
+          var abWa2 = window.open(waUrlPix, "_blank", "noopener,noreferrer");
+          if (!abWa2) {
+            msgAlt.textContent =
+              "Alteração salva. Se o WhatsApp não abriu, copie o link ou abra manualmente: " + waUrlPix;
+            msgAlt.classList.remove("consulta-msg--erro");
+            msgAlt.hidden = false;
+          }
+        }
+      } else {
+        fecharPlaceholderWa();
       }
 
       var refresh = await enviarConsulta({
@@ -1185,15 +1262,8 @@
         email: ultimaConsultaEmail,
         telefone: ultimaConsultaTel,
       });
-      var dadosMsg = d;
       if (refresh.ok && refresh.encontrado && refresh.dados) {
-        dadosMsg = refresh.dados;
         renderDados(refresh.dados, ultimaConsultaEmail, ultimaConsultaTel);
-      }
-
-      if (novaForma === "presencial_secretaria") {
-        var textoWa = montarMensagemMudancaParaPix(dadosMsg, ultimaConsultaEmail, ultimaConsultaTel);
-        window.open(urlWhatsAppConsulta(textoWa), "_blank", "noopener,noreferrer");
       }
     });
   }

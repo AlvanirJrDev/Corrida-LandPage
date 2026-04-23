@@ -1727,6 +1727,7 @@ a:hover {
 .consulta-alterar-pag__msg {
   margin-top: 0.85rem;
   margin-bottom: 0;
+  white-space: pre-wrap;
 }
 
 .consulta-alterar-pag__msg.consulta-msg--erro {

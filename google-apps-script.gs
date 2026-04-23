@@ -18,7 +18,8 @@
  * (3) Implantar → Gerenciar implantações → Nova versão na Web App.
  *
  * Consulta pública: POST JSON { "tipo": "consulta_inscricao", "email": "…", "telefone": "…" } — busca na lista oficial e em abas de pendentes (nomes reservados) e em qualquer outra aba que tenha o cabeçalho padrão (linha 1, coluna "Protocolo").
- * Alterar forma de pagamento (só se ainda não pago): POST { "tipo": "alterar_forma_pagamento", "email", "telefone", "protocolo", "novaForma": "mercado_pago_online" | "presencial_secretaria", "urlRetorno"?, "useSandbox"? } — atualiza colunas na planilha; para online devolve checkoutUrl.
+ * Mudar forma de pagamento (recomendado; funciona mesmo se o doPost antigo não tiver o if de "alterar_forma_pagamento"): mesmo tipo consulta + "acaoMudarPagamento":"alterar_forma_pagamento" + protocolo, novaForma, urlRetorno?, useSandbox?.
+ * Alternativa: POST { "tipo": "alterar_forma_pagamento", ... } — atualiza colunas; para online devolve checkoutUrl.
  *
  * PIX via WhatsApp: fila de pendentes até aprovar pelo GET /exec?protocolo=…&senha=… — status "Pago (presencial confirmado)" + e-mail.
  *
@@ -40,9 +41,9 @@
  * Para desligar: AUTO_BACKUP_DRIVE = 0 nas Propriedades do script.
  *
  * Cores das linhas: o script já pinta fundo vermelho (não pago) e verde (pago) ao gravar — não depende de rodar formatação condicional.
- * Opcional: **instalarFormatacaoCoresStatusPlanilha** duplica o efeito por regras; evite acumular regras repetidas.
- * Coluna "Link aprovar PIX": exige WEB_APP_URL (Propriedades) ou WEB_APP_URL_FALLBACK no código; senha em APROVACAO_SENHA ou SENHA no código.
- * Se a célula do link estiver vazia ou com aviso, configure e rode **reaplicarLinksAprovarPixOndeFaltam**.
+ * Opcional: **instalarFormatacaoCoresStatusPlanilha** recria FC só até última linha + margem e limpa FC antiga na faixa da tabela (evita linhas vazias vermelhas). Se sobrar cor fixa em linhas sem protocolo, rode **limparCorFundoLinhasSemProtocoloTodasAbasInscricao** no editor.
+ * Coluna "Link aprovar PIX": só preenchida para inscrições **PIX / secretaria** (pendentes). Linhas **Mercado Pago** (aguardando pagamento online) ficam sem esse link.
+ * Exige WEB_APP_URL (Propriedades) ou WEB_APP_URL_FALLBACK; senha em APROVACAO_SENHA ou SENHA. Rode **reaplicarLinksAprovarPixOndeFaltam** após configurar ou para limpar links indevidos em linhas de cartão.
  *
  * Compartilhamento da planilha (Google Drive): quem tiver permissão de EDITOR pode ver, alterar e apagar
  * todas as linhas. Não use "Qualquer pessoa com o link pode editar" para o público. Restrinja a
@@ -79,7 +80,13 @@ var EMAIL_REPLY_TO = "";
 
 /** Mesma URL que config.js → webhookUrl (termina em /exec). Alinhe os dois se mudar a implantação. */
 var WEB_APP_URL_FALLBACK =
-  "https://script.google.com/macros/s/AKfycbxL_3csfdYsIsimppYjGf4rK44kRuArvItMUs2miQtVy8FusEVzmwCe-glgNrTAYiBi/exec";
+  "https://script.google.com/macros/s/AKfycbwB8SjUpALax865m_wZxYYQV4BLXbQtBwDRa3B8DBGXrvuRiiwGBcYGT-Kp0PFegf2i/exec";
+
+/**
+ * Vai nas respostas JSON do doPost. No navegador (F12 → Rede → consulta), confira se apiVersao === 2 na resposta;
+ * se não vier ou for menor, a Web App publicada ainda é antiga ou é outra URL que a do config.js.
+ */
+var API_VERSAO_WEBHOOK = 3;
 
 /** Aba principal: inscrições confirmadas (pagamento aprovado). */
 /** Aba de fila: Mercado Pago e presencial/PIX. O script também reconhece nomes alternativos (ver obterAbaPendentes). */
@@ -238,6 +245,26 @@ function inferirCodigoFormaPagamentoLinha(row) {
   if (fp.indexOf("pix") !== -1 || fp.indexOf("whatsapp") !== -1 || fp.indexOf("secretaria") !== -1)
     return "presencial_secretaria";
   return "";
+}
+
+/** Só linhas PIX/presencial devem ter o link "Aprovar PIX" na planilha — não Mercado Pago / cartão. */
+function linhaPrecisaLinkAprovarPix(row) {
+  if (!row || !row.length) return false;
+  var st = String(row[COL_IX_STATUS] || "").toLowerCase();
+  if (st.indexOf("aguardando pagamento online") !== -1) return false;
+  if (st.indexOf("pendente (pix") !== -1) return true;
+  if (st.indexOf("pendente") !== -1 && st.indexOf("pix") !== -1) return true;
+  var fp = String(row[COL_IX_FORMA] || "").toLowerCase();
+  if (fp.indexOf("mercado pago") !== -1 && fp.indexOf("online") !== -1) return false;
+  if (fp.indexOf("mercado pago") !== -1) return false;
+  if (fp.indexOf("pix") !== -1 || fp.indexOf("whatsapp") !== -1 || fp.indexOf("secretaria") !== -1) return true;
+  return false;
+}
+
+function limparCelulaLinkAprovacao(sheet, rowIndex) {
+  if (!sheet || rowIndex < 2) return;
+  garantirCabecalhosPlanilha(sheet);
+  sheet.getRange(rowIndex, COL_IX_LINK_APROVACAO + 1).clearContent();
 }
 
 function linhaCombinaEmailOuTelefone(row, email, telDigits) {
@@ -511,11 +538,16 @@ var COR_FUNDO_LINHA_NAO_PAGO = "#ffcdd2";
 function aplicarCorFundoLinhaInscricao(sheet, rowIndex, statusOuVazio) {
   if (!sheet || rowIndex < 2) return;
   garantirCabecalhosPlanilha(sheet);
+  var proto = String(sheet.getRange(rowIndex, COL_IX_PROTOCOLO + 1).getValue() || "").trim();
+  var r = sheet.getRange(rowIndex, 1, rowIndex, CABECALHOS.length);
+  if (!proto) {
+    r.setBackground(null);
+    return;
+  }
   var st =
     statusOuVazio != null && String(statusOuVazio) !== ""
       ? String(statusOuVazio).trim()
       : String(sheet.getRange(rowIndex, COL_IX_STATUS + 1).getValue() || "").trim();
-  var r = sheet.getRange(rowIndex, 1, rowIndex, CABECALHOS.length);
   var cls = classificarStatusPagamento(st);
   if (cls === "pago") {
     r.setBackground(COR_FUNDO_LINHA_PAGO);
@@ -524,6 +556,51 @@ function aplicarCorFundoLinhaInscricao(sheet, rowIndex, statusOuVazio) {
   } else {
     r.setBackground(null);
   }
+}
+
+/**
+ * Remove fundo “manual” (setBackground) em linhas sem protocolo — evita faixas #ffcdd2 abaixo da última inscrição.
+ * Não altera formatação condicional; use após gravar linha ou rode limparCorFundoLinhasSemProtocoloTodasAbasInscricao().
+ */
+function limparCorFundoLinhasSemProtocoloNaFaixa(sheet, rowFrom, rowTo) {
+  if (!sheet || rowFrom < 2 || rowTo < rowFrom) return 0;
+  if (!sheetTemCabecalhoInscricao(sheet)) return 0;
+  garantirCabecalhosPlanilha(sheet);
+  var numCols = CABECALHOS.length;
+  var cap = Math.min(rowTo, Math.max(sheet.getMaxRows(), rowFrom));
+  if (cap < rowFrom) return 0;
+  var vals = sheet.getRange(rowFrom, 1, cap, numCols).getValues();
+  var notas = [];
+  for (var i = 0; i < vals.length; i++) {
+    if (String(vals[i][COL_IX_PROTOCOLO] || "").trim()) continue;
+    notas.push(sheet.getRange(rowFrom + i, 1, rowFrom + i, numCols).getA1Notation());
+  }
+  if (notas.length === 0) return 0;
+  var CHUNK = 200;
+  for (var u = 0; u < notas.length; u += CHUNK) {
+    sheet.getRangeList(notas.slice(u, u + CHUNK)).setBackground(null);
+  }
+  return notas.length;
+}
+
+/** Limpa linhas vazias (sem protocolo) da linha 2 até max(lastRow+250, 120), limitado a maxLinha. */
+function limparCorFundoLinhasSemProtocoloAbaInscricao(sheet, maxLinha) {
+  if (!sheet || !sheetTemCabecalhoInscricao(sheet)) return 0;
+  var lr = sheet.getLastRow();
+  var fim = Math.min(maxLinha || 2000, Math.max(lr + 250, 120));
+  return limparCorFundoLinhasSemProtocoloNaFaixa(sheet, 2, fim);
+}
+
+/** Execute no editor: remove fundo fixo em linhas sem protocolo em todas as abas de inscrição. */
+function limparCorFundoLinhasSemProtocoloTodasAbasInscricao() {
+  var ss = obterPlanilhaCorridaOuErro();
+  var abas = listarAbasParaBuscaInscricao(ss);
+  var total = 0;
+  for (var i = 0; i < abas.length; i++) {
+    total += limparCorFundoLinhasSemProtocoloAbaInscricao(abas[i], 2000);
+  }
+  Logger.log("limparCorFundoLinhasSemProtocoloTodasAbasInscricao: celulas-linhas limpas (aprox): " + total);
+  return { ok: true, linhasComFundoLimpo: total };
 }
 
 /** URL do GET de aprovação PIX/presencial (mesma Web App que recebe o POST de inscrição). */
@@ -636,9 +713,18 @@ function reaplicarLinksAprovarPixOndeFaltam() {
       var proto = String(row[COL_IX_PROTOCOLO] || "").trim();
       if (!proto) continue;
       if (classificarStatusPagamento(row[COL_IX_STATUS]) !== "nao_pago") continue;
-      var cLink = sheet.getRange(i + 2, linkCol);
+      var rowIdx = i + 2;
+      if (!linhaPrecisaLinkAprovarPix(row)) {
+        var cLimpar = sheet.getRange(rowIdx, linkCol);
+        if (celulaJaTemLinkAprovacao(cLimpar) || String(cLimpar.getValue() || "").trim()) {
+          limparCelulaLinkAprovacao(sheet, rowIdx);
+          n++;
+        }
+        continue;
+      }
+      var cLink = sheet.getRange(rowIdx, linkCol);
       if (celulaJaTemLinkAprovacao(cLink)) continue;
-      aplicarLinkAprovacaoPixGarantido(sheet, i + 2, proto);
+      aplicarLinkAprovacaoPixGarantido(sheet, rowIdx, proto);
       n++;
     }
   }
@@ -666,6 +752,7 @@ function reaplicarCoresFundoConformeStatus() {
       aplicarCorFundoLinhaInscricao(sheet, i + 2, "");
       n++;
     }
+    limparCorFundoLinhasSemProtocoloAbaInscricao(sheet, 2000);
   }
   Logger.log("reaplicarCoresFundoConformeStatus: linhas repintadas: " + n);
   return { ok: true, linhasRepintadas: n };
@@ -1041,6 +1128,7 @@ function executarAlterarFormaPagamento(data) {
     sheet.getRange(rowIndex, COL_IX_STATUS + 1).setValue("Pendente (PIX via WhatsApp)");
     aplicarLinkAprovacaoPixGarantido(sheet, rowIndex, protocolo);
     aplicarCorFundoLinhaInscricao(sheet, rowIndex, "Pendente (PIX via WhatsApp)");
+    limparCorFundoLinhasSemProtocoloAbaInscricao(sheet, 2000);
     sincronizarBackupSegurancaNoDrive();
     return {
       ok: true,
@@ -1078,8 +1166,9 @@ function executarAlterarFormaPagamento(data) {
 
   sheet.getRange(rowIndex, COL_IX_FORMA + 1).setValue("Mercado Pago (pagamento online)");
   sheet.getRange(rowIndex, COL_IX_STATUS + 1).setValue("Aguardando pagamento online");
-  aplicarLinkAprovacaoPixGarantido(sheet, rowIndex, protocolo);
+  limparCelulaLinkAprovacao(sheet, rowIndex);
   aplicarCorFundoLinhaInscricao(sheet, rowIndex, "Aguardando pagamento online");
+  limparCorFundoLinhasSemProtocoloAbaInscricao(sheet, 2000);
   sincronizarBackupSegurancaNoDrive();
 
   return {
@@ -1090,6 +1179,12 @@ function executarAlterarFormaPagamento(data) {
 }
 
 function executarConsultaInscricao(data) {
+  /** Web Apps antigas só encaminham consulta_inscricao ao doPost; alterar_forma_pagamento caía em "ignored". */
+  var acao = String((data && data.acaoMudarPagamento) || "").trim();
+  if (acao === "alterar_forma_pagamento") {
+    return executarAlterarFormaPagamento(Object.assign({}, data, { tipo: "alterar_forma_pagamento" }));
+  }
+
   var email = data.email;
   var tel = data.telefone != null ? data.telefone : data.telefoneDigitos;
   tel = tel != null ? String(tel) : "";
@@ -2062,17 +2157,23 @@ function doPost(e) {
       }
     }
 
-    if (data.tipo === "consulta_inscricao") {
+    var tipoPost = String(data && data.tipo != null ? data.tipo : "")
+      .replace(/^\uFEFF/, "")
+      .trim();
+
+    if (tipoPost === "consulta_inscricao") {
       var outConsulta = executarConsultaInscricao(data);
+      outConsulta.apiVersao = API_VERSAO_WEBHOOK;
       return ContentService.createTextOutput(JSON.stringify(outConsulta)).setMimeType(ContentService.MimeType.JSON);
     }
 
-    if (data.tipo === "alterar_forma_pagamento") {
+    if (tipoPost === "alterar_forma_pagamento") {
       var outAlt = executarAlterarFormaPagamento(data);
+      outAlt.apiVersao = API_VERSAO_WEBHOOK;
       return ContentService.createTextOutput(JSON.stringify(outAlt)).setMimeType(ContentService.MimeType.JSON);
     }
 
-    if (data.tipo === "estado_lotes") {
+    if (tipoPost === "estado_lotes") {
       try {
         var ssLotes = obterPlanilhaCorridaOuErro();
         var pPromo = contarInscricoesLoteTotal(ssLotes, ID_LOTE_PROMO);
@@ -2080,6 +2181,7 @@ function doPost(e) {
         return ContentService.createTextOutput(
           JSON.stringify({
             ok: true,
+            apiVersao: API_VERSAO_WEBHOOK,
             limitePromo: LIMITE_LOTE_PROMO,
             limiteRegular: LIMITE_LOTE_REGULAR,
             promoPagos: pPromo,
@@ -2089,13 +2191,13 @@ function doPost(e) {
           })
         ).setMimeType(ContentService.MimeType.JSON);
       } catch (errL) {
-        return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(errL) })).setMimeType(
-          ContentService.MimeType.JSON
-        );
+        return ContentService.createTextOutput(
+          JSON.stringify({ ok: false, apiVersao: API_VERSAO_WEBHOOK, error: String(errL) })
+        ).setMimeType(ContentService.MimeType.JSON);
       }
     }
 
-    if (data.tipo !== "inscricao_corrida") {
+    if (tipoPost !== "inscricao_corrida") {
       var payId = extrairPaymentIdNotificacao(data, e);
       if (payId) {
         processarNotificacaoPagamentoMercadoPago(payId);
@@ -2104,7 +2206,9 @@ function doPost(e) {
         );
       }
       if (Object.keys(data).length > 0) {
-        return ContentService.createTextOutput(JSON.stringify({ ok: true, ignored: true })).setMimeType(ContentService.MimeType.JSON);
+        var ignBody = { ok: true, ignored: true, apiVersao: API_VERSAO_WEBHOOK };
+        if (tipoPost) ignBody.tipoRecebido = tipoPost;
+        return ContentService.createTextOutput(JSON.stringify(ignBody)).setMimeType(ContentService.MimeType.JSON);
       }
       return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "Corpo vazio ou notificação não reconhecida." }))
         .setMimeType(ContentService.MimeType.JSON);
@@ -2226,8 +2330,9 @@ function doPost(e) {
       if (mpRes.url) {
         out.checkoutUrl = mpRes.url;
         out.aguardandoPagamento = true;
-        aplicarLinkAprovacaoPixGarantido(pend, pend.getLastRow(), data.protocolo);
+        limparCelulaLinkAprovacao(pend, pend.getLastRow());
         aplicarCorFundoLinhaInscricao(pend, pend.getLastRow(), "Aguardando pagamento online");
+        limparCorFundoLinhasSemProtocoloAbaInscricao(pend, 2000);
         sincronizarBackupSegurancaNoDrive();
         enviarEmailInscricaoRecebida(rowPend);
       } else {
@@ -2243,10 +2348,12 @@ function doPost(e) {
       pendPresencial.appendRow(row);
       aplicarLinkAprovacaoPixGarantido(pendPresencial, pendPresencial.getLastRow(), data.protocolo);
       aplicarCorFundoLinhaInscricao(pendPresencial, pendPresencial.getLastRow(), "Pendente (PIX via WhatsApp)");
+      limparCorFundoLinhasSemProtocoloAbaInscricao(pendPresencial, 2000);
       sincronizarBackupSegurancaNoDrive();
       enviarEmailInscricaoRecebida(row);
     }
 
+    out.apiVersao = API_VERSAO_WEBHOOK;
     return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     var es = String(err);
@@ -2437,24 +2544,59 @@ function formulasFormatacaoCondicionalStatus(letraStatus, ss) {
     isPt || /^(de|at|ch|fr|es|it|nl|pl|cs|ro|be|lu|dk|no|se|fi|ru)/.test(loc);
   var sep = useSemi ? ";" : ",";
   var c = "$" + letraStatus + "2";
+  /** Só pinta linhas com protocolo “real” (LIMPAR/TRIM evita espaço invisível contar como preenchido). */
+  var letraProto = colunaLetra1Based(COL_IX_PROTOCOLO + 1);
+  var cProto = "$" + letraProto + "2";
+  var protoPreenchido = isPt ? "LIMPAR(" + cProto + ")<>\"\"" : "LEN(TRIM(" + cProto + ' & ""))>0';
   if (isPt) {
     return {
-      fVerde: "=ESQUERDA(MINÚSCULA(" + c + ")" + sep + '4)="pago"',
-      fVermelhoPend: "=SEERRO(LOCALIZAR(\"pendente\"" + sep + c + ");0)>0",
-      fVermelhoAg: "=SEERRO(LOCALIZAR(\"aguardando\"" + sep + c + ");0)>0",
+      fVerde:
+        "=SE(" +
+        protoPreenchido +
+        sep +
+        "ESQUERDA(MINÚSCULA(" +
+        c +
+        ")" +
+        sep +
+        '4)="pago"' +
+        sep +
+        "FALSO)",
+      fVermelhoPend:
+        "=SE(" +
+        protoPreenchido +
+        sep +
+        "SEERRO(LOCALIZAR(\"pendente\"" +
+        sep +
+        c +
+        ");0)>0" +
+        sep +
+        "FALSO)",
+      fVermelhoAg:
+        "=SE(" +
+        protoPreenchido +
+        sep +
+        "SEERRO(LOCALIZAR(\"aguardando\"" +
+        sep +
+        c +
+        ");0)>0" +
+        sep +
+        "FALSO)",
     };
   }
   return {
-    fVerde: "=LEFT(LOWER(" + c + ")" + sep + '4)="pago"',
-    fVermelhoPend: "=IFERROR(SEARCH(\"pendente\"" + sep + c + ");0)>0",
-    fVermelhoAg: "=IFERROR(SEARCH(\"aguardando\"" + sep + c + ");0)>0",
+    fVerde: "=IF(" + protoPreenchido + sep + "LEFT(LOWER(" + c + ")" + sep + '4)="pago"' + sep + "FALSE)",
+    fVermelhoPend:
+      "=IF(" + protoPreenchido + sep + "IFERROR(SEARCH(\"pendente\"" + sep + c + ");0)>0" + sep + "FALSE)",
+    fVermelhoAg:
+      "=IF(" + protoPreenchido + sep + "IFERROR(SEARCH(\"aguardando\"" + sep + c + ");0)>0" + sep + "FALSE)",
   };
 }
 
 /**
  * Formatação condicional na aba: fundo vermelho claro = ainda não pago; verde claro = pago.
  * Usa a coluna "Status pagamento" (COL_IX_STATUS). Execute no editor: instalarFormatacaoCoresStatusPlanilha()
- * Executar **uma vez** por aba (ou apague regras duplicadas em Formatar → Formatação condicional).
+ * Limpa FC antiga na faixa A2:últimas colunas (até 10 mil linhas) e recria só até última linha com dados + margem,
+ * para não deixar regras antigas pintando milhares de linhas vazias.
  */
 function aplicarFormatacaoCoresNaAba(sheet) {
   if (!sheet || sheet.getLastRow() < 1) return;
@@ -2463,7 +2605,16 @@ function aplicarFormatacaoCoresNaAba(sheet) {
   var colSt = COL_IX_STATUS + 1;
   var letra = colunaLetra1Based(colSt);
   var numCols = CABECALHOS.length;
-  var endRow = Math.min(10000, Math.max(sheet.getMaxRows(), 500));
+  var limparAte = Math.min(10000, Math.max(sheet.getMaxRows(), 500));
+  var blocoLimpar = sheet.getRange(2, 1, limparAte, numCols);
+  try {
+    blocoLimpar.clearConditionalFormatRules();
+  } catch (errCf0) {
+    Logger.log("clearConditionalFormatRules: " + errCf0);
+  }
+
+  var lastRow = Math.max(2, sheet.getLastRow());
+  var endRow = Math.min(10000, Math.max(lastRow + 100, 50));
   var rangeRows = sheet.getRange(2, 1, endRow, numCols);
 
   var F = formulasFormatacaoCondicionalStatus(letra, ss);
@@ -2491,7 +2642,8 @@ function aplicarFormatacaoCoresNaAba(sheet) {
   regras.push(vermelhoAg);
   regras.push(verde);
   sheet.setConditionalFormatRules(regras);
-  Logger.log("Formatacao condicional adicionada na aba: " + sheet.getName());
+  limparCorFundoLinhasSemProtocoloAbaInscricao(sheet, 2000);
+  Logger.log("Formatacao condicional na aba: " + sheet.getName() + " linhas 2.." + endRow);
 }
 
 /** Instala cores em todas as abas com formato de inscrição (lista oficial + filas de pendentes). */
