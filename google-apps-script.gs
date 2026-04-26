@@ -86,7 +86,7 @@ var WEB_APP_URL_FALLBACK =
  * Vai nas respostas JSON do doPost. No navegador (F12 → Rede → consulta), confira se apiVersao === 2 na resposta;
  * se não vier ou for menor, a Web App publicada ainda é antiga ou é outra URL que a do config.js.
  */
-var API_VERSAO_WEBHOOK = 3;
+var API_VERSAO_WEBHOOK = 4;
 
 /** Aba principal: inscrições confirmadas (pagamento aprovado). */
 /** Aba de fila: Mercado Pago e presencial/PIX. O script também reconhece nomes alternativos (ver obterAbaPendentes). */
@@ -182,7 +182,22 @@ function jaTemCadastro(sheet, email, telDigits) {
     var rowEmail = String(values[i][COL_IX_EMAIL]).trim().toLowerCase();
     if (em && rowEmail && rowEmail === em) return "email";
     var rowTel = soDigitos(values[i][COL_IX_TELEFONE]);
-    if (td.length >= 10 && rowTel && rowTel === td) return "telefone";
+    if (td.length >= 10 && rowTel && telefonesIguaisBR(rowTel, td)) return "telefone";
+  }
+  return null;
+}
+
+/** Procura protocolo em todas as abas de inscrição (lista oficial + pendentes). */
+function localizarProtocoloQualquerAba(ss, protocolo) {
+  var p = String(protocolo || "").trim();
+  if (!p) return null;
+  var abas = listarAbasParaBuscaInscricao(ss);
+  for (var i = 0; i < abas.length; i++) {
+    var sh = abas[i];
+    if (!sheetTemCabecalhoInscricao(sh)) continue;
+    garantirCabecalhosPlanilha(sh);
+    var row = encontrarLinhaPorProtocolo(sh, p);
+    if (row > 0) return { sheet: sh, rowIndex: row };
   }
   return null;
 }
@@ -1800,7 +1815,10 @@ function processarNotificacaoPagamentoMercadoPago(paymentId) {
   rowData[COL_IX_STATUS] = "Pago (Mercado Pago)";
   rowData[COL_IX_LINK_APROVACAO] = "";
 
-  if (jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
+  if (
+    encontrarLinhaPorProtocolo(main, rowData[COL_IX_PROTOCOLO]) > 0 ||
+    jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])
+  ) {
     pend.deleteRow(rowIndex);
     sincronizarBackupSegurancaNoDrive();
     return;
@@ -2133,7 +2151,10 @@ function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
   rowData[COL_IX_STATUS] = novoStatus;
   rowData[COL_IX_LINK_APROVACAO] = "";
 
-  if (!jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
+  if (
+    encontrarLinhaPorProtocolo(main, rowData[COL_IX_PROTOCOLO]) < 0 &&
+    !jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])
+  ) {
     main.appendRow(rowData);
     aplicarCorFundoLinhaInscricao(main, main.getLastRow(), novoStatus);
     enviarEmailPagamentoConfirmado(rowData);
@@ -2299,6 +2320,15 @@ function doPost(e) {
     }
 
     var out = { ok: true };
+    var jaExisteProtocolo = localizarProtocoloQualquerAba(ss, data.protocolo);
+    if (jaExisteProtocolo) {
+      out.ok = true;
+      out.duplicado = true;
+      out.protocolo = String(data.protocolo || "").trim();
+      out.mensagem = "Este protocolo já foi registrado anteriormente. Não foi criada linha duplicada.";
+      out.apiVersao = API_VERSAO_WEBHOOK;
+      return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+    }
     if (loteAjustadoAutomatico) {
       out.loteAjustadoAutomatico = true;
       out.lote = data.lote;
@@ -2653,4 +2683,34 @@ function instalarFormatacaoCoresStatusPlanilha() {
   for (var i = 0; i < abas.length; i++) {
     aplicarFormatacaoCoresNaAba(abas[i]);
   }
+}
+
+/**
+ * Remove duplicados por protocolo na aba principal, preservando a primeira ocorrência.
+ * Execute no editor quando já houver linhas repetidas.
+ */
+function removerDuplicadosPorProtocoloNaListaOficial() {
+  var ss = obterPlanilhaCorridaOuErro();
+  var sheet = obterAbaInscricoes(ss);
+  if (!sheet) return { ok: false, error: "Aba principal não encontrada." };
+  garantirCabecalhosPlanilha(sheet);
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 3) return { ok: true, removidas: 0 };
+  var values = sheet.getRange(2, 1, lastRow - 1, CABECALHOS.length).getValues();
+  var vistos = {};
+  var apagar = [];
+  for (var i = 0; i < values.length; i++) {
+    var proto = String(values[i][COL_IX_PROTOCOLO] || "").trim();
+    if (!proto) continue;
+    if (vistos[proto]) {
+      apagar.push(i + 2);
+      continue;
+    }
+    vistos[proto] = true;
+  }
+  for (var j = apagar.length - 1; j >= 0; j--) {
+    sheet.deleteRow(apagar[j]);
+  }
+  if (apagar.length > 0) sincronizarBackupSegurancaNoDrive();
+  return { ok: true, removidas: apagar.length };
 }
