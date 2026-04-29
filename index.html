@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,600&family=Racing+Sans+One&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=19" />
 </head>
 <body>
   <div class="urgency-bar" role="region" aria-label="Aviso de vagas">
@@ -342,15 +342,73 @@
           </p>
         </div>
 
-        <!-- Novo patrocinador: adicione <li class="sponsor-tile"> na vitrine ou <li class="sponsor-slot sponsor-slot--empty"> nas vagas. -->
+        <!-- Novo patrocinador: em #sponsors-showcase-list adicione <li class="sponsor-tile"> com logo + nome (aparece no carrossel e na vitrine do modal). -->
 
         <div class="sponsors-wall">
           <header class="sponsors-wall__header">
             <p class="sponsors-wall__badge">Patrocínio em destaque</p>
             <h3 class="sponsors-wall__thanks">Quem já apoia</h3>
+            <p class="sponsors-scroll-hint">
+              Os patrocinadores aparecem em destaque, um de cada vez, com rotação automática. Use as setas ou os pontos para navegar. Para ver o texto de gratidão da organização e todas as logos juntas, use o botão abaixo.
+            </p>
           </header>
 
-          <ul class="sponsors-showcase" role="list" aria-label="Patrocinadores atuais">
+          <div
+            class="sponsors-spotlight"
+            id="sponsors-spotlight"
+            role="region"
+            aria-roledescription="carrossel"
+            aria-labelledby="sponsors-spotlight-heading"
+            data-spotlight-interval="4500"
+            hidden
+          >
+            <h4 id="sponsors-spotlight-heading" class="visually-hidden">Patrocinadores em destaque — rotação automática</h4>
+            <div class="sponsors-spotlight__chrome">
+              <button
+                type="button"
+                class="sponsors-spotlight__arrow sponsors-spotlight__arrow--prev"
+                aria-controls="sponsors-spotlight-panel"
+                aria-label="Patrocinador anterior"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+              </button>
+              <div class="sponsors-spotlight__stage">
+                <div
+                  id="sponsors-spotlight-panel"
+                  class="sponsors-spotlight__panel"
+                  tabindex="0"
+                  aria-live="off"
+                ></div>
+              </div>
+              <button
+                type="button"
+                class="sponsors-spotlight__arrow sponsors-spotlight__arrow--next"
+                aria-controls="sponsors-spotlight-panel"
+                aria-label="Próximo patrocinador"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+              </button>
+            </div>
+            <p class="sponsors-spotlight__caption" id="sponsors-spotlight-caption"></p>
+            <div class="sponsors-spotlight__footer">
+              <div class="sponsors-spotlight__dots" id="sponsors-spotlight-dots" role="tablist" aria-label="Selecionar patrocinador"></div>
+              <button type="button" class="sponsors-spotlight__toggle" id="sponsors-spotlight-toggle" aria-pressed="false">
+                <span class="sponsors-spotlight__toggle-label sponsors-spotlight__toggle-label--pause">Pausar</span>
+                <span class="sponsors-spotlight__toggle-label sponsors-spotlight__toggle-label--play" hidden>Retomar</span>
+              </button>
+            </div>
+            <p id="sponsors-spotlight-announcer" class="visually-hidden" aria-live="polite"></p>
+          </div>
+
+          <div class="sponsors-wall__thanks-row">
+            <button type="button" class="btn btn--primary sponsors-thanks-trigger" id="sponsors-open-thanks-modal">
+              Conheça todos os patrocinadores
+            </button>
+            <p class="sponsors-wall__thanks-note">Abre o painel com o <strong>agradecimento da organização</strong> e a <strong>vitrine de todos os logos</strong> em destaque.</p>
+          </div>
+
+          <div class="sponsors-data-source" hidden aria-hidden="true">
+          <ul class="sponsors-showcase" id="sponsors-showcase-list" role="list" aria-label="Dados dos patrocinadores">
             <li class="sponsor-tile">
               <div class="sponsor-tile__inner">
                 <img class="sponsor-tile__img" src="assets/patrocinio-dr-ana-beatriz-freitas.png" alt="Dr. Ana Beatriz Freitas" width="240" height="110" loading="lazy" decoding="async" />
@@ -369,7 +427,115 @@
               </div>
               <span class="sponsor-tile__name">Du Cell</span>
             </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-padaria-da-praca.png" alt="Padaria da Praça" width="1024" height="392" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Padaria da Praça</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img sponsor-tile__img--mundo-pet" src="assets/patrocinio-mundo-pet.png" alt="Mundo Pet" width="1200" height="1200" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Mundo Pet</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-dr-artur-guimaraes.png" alt="Dr. Artur Guimarães" width="1024" height="724" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Dr. Artur Guimarães</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-mais-q-viagens.png" alt="Mais Q Viagens" width="1024" height="686" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Mais Q Viagens</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-dr-andre-muniz.png" alt="Dr. André Muniz — Endocrinologia" width="1024" height="877" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Dr. André Muniz</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img sponsor-tile__img--gean-veiculos" src="assets/patrocinio-gean-veiculos.png" alt="Gean Veículos" width="640" height="640" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Gean Veículos</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-fabricio-didier.png" alt="Fabrício Didier" width="1024" height="724" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Fabrício Didier</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-raniere-comercial.png" alt="Raniere Comercial" width="800" height="400" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">Raniere Comercial</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img class="sponsor-tile__img" src="assets/patrocinio-kefi.png" alt="KEFI" width="800" height="400" loading="lazy" decoding="async" />
+              </div>
+              <span class="sponsor-tile__name">KEFI</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img
+                  class="sponsor-tile__img sponsor-tile__img--marcelo-personal"
+                  src="assets/patrocinio-marcelo-andre-personal.png"
+                  alt="Marcelo André — Personal"
+                  width="800"
+                  height="400"
+                  loading="lazy"
+                  decoding="async"
+                />
+              </div>
+              <span class="sponsor-tile__name">Marcelo André — Personal</span>
+            </li>
+            <li class="sponsor-tile">
+              <div class="sponsor-tile__inner">
+                <img
+                  class="sponsor-tile__img"
+                  src="assets/patrocinio-keilla-cysneiros.png"
+                  alt="Keilla Cysneiros — Nutricionista"
+                  width="800"
+                  height="400"
+                  loading="lazy"
+                  decoding="async"
+                />
+              </div>
+              <span class="sponsor-tile__name">Keilla Cysneiros — Nutricionista</span>
+            </li>
           </ul>
+          </div>
+
+          <div id="sponsors-thanks-modal" class="sponsors-modal" hidden>
+            <div class="sponsors-modal__backdrop" tabindex="-1" aria-hidden="true"></div>
+            <div
+              class="sponsors-modal__panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="sponsors-thanks-title"
+              tabindex="-1"
+            >
+              <button type="button" class="sponsors-modal__close" aria-label="Fechar">&times;</button>
+              <div class="sponsors-modal__intro">
+                <h3 id="sponsors-thanks-title" class="sponsors-modal__title">Nosso agradecimento a todos os patrocinadores</h3>
+                <p class="sponsors-modal__lead">
+                  A organização da Corrida Mariana, em nome do <strong>ECC</strong>, do <strong>EJC</strong> e da comunidade de <strong>Sanharó</strong>, expressa gratidão a <strong>cada marca</strong> que confia neste evento e nos projetos sociais que ele ajuda a sustentar. Sem vocês, não haveria corrida, não haveria kit, não haveria esse gesto de esporte e fé reunindo famílias. <strong>Obrigado a todos os patrocinadores</strong> — vocês fazem parte desta história.
+                </p>
+              </div>
+              <div
+                id="sponsors-modal-logos-wall"
+                class="sponsors-modal__logos-wall"
+                role="group"
+                aria-label="Logos de todos os patrocinadores"
+              ></div>
+            </div>
+          </div>
 
           <div class="sponsors-vacancies">
             <div class="sponsors-vacancies__intro" aria-labelledby="sponsors-vacancies-heading">
@@ -377,14 +543,6 @@
               <p class="sponsors-vacancies__hint">Logotipo na vitrine, kit e divulgação — combinamos com a organização.</p>
             </div>
             <ul class="sponsors-grid sponsors-grid--vacancies" role="list">
-              <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
-                <span class="sponsor-slot__plus" aria-hidden="true">+</span>
-                <span class="sponsor-slot__hint">Sua marca</span>
-              </li>
-              <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
-                <span class="sponsor-slot__plus" aria-hidden="true">+</span>
-                <span class="sponsor-slot__hint">Sua marca</span>
-              </li>
               <li class="sponsor-slot sponsor-slot--empty" aria-label="Vaga para patrocinador">
                 <span class="sponsor-slot__plus" aria-hidden="true">+</span>
                 <span class="sponsor-slot__hint">Sua marca</span>
@@ -734,6 +892,8 @@
   </div>
 
   <script src="config.js?v=5"></script>
+  <script src="sponsors-spotlight.js?v=3" defer></script>
+  <script src="sponsors-thanks-modal.js?v=4" defer></script>
   <script src="inscricao.js?v=10" defer></script>
   <a class="fab" href="https://wa.me/5511999999999" target="_blank" rel="noopener noreferrer" aria-label="Inscrever-se via WhatsApp">
     <span class="fab__label">Inscreva-se</span>

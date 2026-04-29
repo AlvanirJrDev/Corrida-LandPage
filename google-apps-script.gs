@@ -187,9 +187,79 @@ function jaTemCadastro(sheet, email, telDigits) {
   return null;
 }
 
+/** URL / planilha: remove BOM e caracteres invisíveis do protocolo na busca. */
+function normalizarProtocoloLookup_(proto) {
+  return String(proto || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
+}
+
+/**
+ * Na lista oficial, mantém só a linha mais acima com o mesmo protocolo (remove duplicatas abaixo).
+ */
+function dedupePorProtocoloNaListaOficial_(main, protocolo) {
+  var p = normalizarProtocoloLookup_(protocolo);
+  if (!p || !main) return 0;
+  garantirCabecalhosPlanilha(main);
+  var values = main.getDataRange().getValues();
+  var start = 0;
+  if (values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo") {
+    start = 1;
+  }
+  var linhas = [];
+  var i;
+  for (i = start; i < values.length; i++) {
+    if (normalizarProtocoloLookup_(values[i][COL_IX_PROTOCOLO]) === p) {
+      linhas.push(i + 1);
+    }
+  }
+  if (linhas.length <= 1) return 0;
+  linhas.sort(function (a, b) {
+    return a - b;
+  });
+  var removidas = 0;
+  for (i = linhas.length - 1; i >= 1; i--) {
+    main.deleteRow(linhas[i]);
+    removidas++;
+  }
+  return removidas;
+}
+
+/**
+ * Rodar no editor (▶ Executar) uma vez: na aba da lista oficial, remove linhas repetidas com o mesmo protocolo,
+ * mantendo só a primeira ocorrência (mais acima). Corrige duplicatas antigas sem precisar reabrir o link de aprovação.
+ */
+function limparDuplicadosListaOficialManual() {
+  var ss = obterPlanilhaCorridaOuErro();
+  var main = obterAbaInscricoes(ss);
+  if (!main) {
+    throw new Error("Aba principal (lista oficial) não encontrada.");
+  }
+  garantirCabecalhosPlanilha(main);
+  var values = main.getDataRange().getValues();
+  var start = values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo" ? 1 : 0;
+  var visto = {};
+  var protos = [];
+  var i;
+  for (i = start; i < values.length; i++) {
+    var pr = normalizarProtocoloLookup_(values[i][COL_IX_PROTOCOLO]);
+    if (!pr || visto[pr]) continue;
+    visto[pr] = true;
+    protos.push(pr);
+  }
+  var total = 0;
+  for (i = 0; i < protos.length; i++) {
+    total += dedupePorProtocoloNaListaOficial_(main, protos[i]);
+  }
+  sincronizarBackupSegurancaNoDrive();
+  Logger.log("limparDuplicadosListaOficialManual: linhas extras removidas (total): " + total);
+  return { ok: true, linhasExtrasRemovidas: total };
+}
+
 /** Procura protocolo em todas as abas de inscrição (lista oficial + pendentes). */
 function localizarProtocoloQualquerAba(ss, protocolo) {
-  var p = String(protocolo || "").trim();
+  var p = normalizarProtocoloLookup_(protocolo);
   if (!p) return null;
   var abas = listarAbasParaBuscaInscricao(ss);
   for (var i = 0; i < abas.length; i++) {
@@ -454,7 +524,7 @@ function encontrarProtocoloNasAbasPendentes(ss, protocolo) {
     throw new Error("encontrarProtocoloNasAbasPendentes: planilha (ss) inválida ou não informada.");
   }
   var main = obterAbaInscricoes(ss);
-  var p = String(protocolo || "").trim();
+  var p = normalizarProtocoloLookup_(protocolo);
   if (!p) return null;
 
   var listaNomeada = listarAbasPorNomesPendentes(ss);
@@ -779,13 +849,67 @@ function encontrarLinhaPorProtocolo(sheet, protocolo) {
   if (values.length > 0 && String(values[0][COL_IX_PROTOCOLO]) === "Protocolo") {
     start = 1;
   }
-  var p = String(protocolo).trim();
+  var p = normalizarProtocoloLookup_(protocolo);
   for (var i = start; i < values.length; i++) {
-    if (String(values[i][COL_IX_PROTOCOLO]).trim() === p) {
+    if (normalizarProtocoloLookup_(values[i][COL_IX_PROTOCOLO]) === p) {
       return i + 1;
     }
   }
   return -1;
+}
+
+/**
+ * Remove linhas com o protocolo nas abas de pendentes (nunca apaga da lista oficial).
+ * Evita fila órfã se o link de aprovação for aberto 2x, pré-visualizado no e-mail, etc.
+ */
+function apagarProtocoloNasAbasPendentesExcetoLista_(ss, protocolo) {
+  var main = obterAbaInscricoes(ss);
+  var p = normalizarProtocoloLookup_(protocolo);
+  if (!p || !main) return 0;
+  var removidas = 0;
+  var listaNomeada = listarAbasPorNomesPendentes(ss);
+  var seen = {};
+  var i;
+  var sh;
+
+  function purgeSheet(shP) {
+    if (!shP) return;
+    if (shP.getSheetId() === main.getSheetId()) return;
+    garantirCabecalhosPlanilha(shP);
+    var row;
+    while ((row = encontrarLinhaPorProtocolo(shP, p)) > 0) {
+      shP.deleteRow(row);
+      removidas++;
+    }
+  }
+
+  for (i = 0; i < listaNomeada.length; i++) {
+    sh = listaNomeada[i];
+    seen[sh.getSheetId()] = true;
+    purgeSheet(sh);
+  }
+
+  var todas = ss.getSheets();
+  for (i = 0; i < todas.length; i++) {
+    sh = todas[i];
+    if (sh.getSheetId() === main.getSheetId()) continue;
+    if (seen[sh.getSheetId()]) continue;
+    if (!sheetTemCabecalhoInscricao(sh)) continue;
+    purgeSheet(sh);
+  }
+  return removidas;
+}
+
+/** Depois de Range.moveTo entre abas, a linha de origem pode ficar só com células vazias — remove para não “sumir” vaga na fila. */
+function limparLinhaVaziaPorProtocoloNaAba_(sheet, rowIndex) {
+  if (!sheet || rowIndex < 2) return;
+  try {
+    var v = sheet.getRange(rowIndex, COL_IX_PROTOCOLO + 1).getValue();
+    if (String(v || "").trim()) return;
+    sheet.deleteRow(rowIndex);
+  } catch (errL) {
+    Logger.log("limparLinhaVaziaPorProtocoloNaAba_: " + errL);
+  }
 }
 
 /** Ordem: lista oficial → abas com nome de pendentes → outras abas com cabeçalho de inscrição (ex.: fila PIX). */
@@ -2088,80 +2212,117 @@ function migrarPresenciaisPendentesParaAbaPendentes() {
  * Endpoint manual (GET /exec/{protocolo}/{senha}) para virar status de pagamento presencial.
  */
 function confirmarPagamentoPresencialPorProtocolo(protocolo, senha) {
-  var p = String(protocolo || "").trim();
-  var s = String(senha || "").trim();
-  if (!p) {
-    return { ok: false, error: "Informe o protocolo na URL." };
-  }
-  var senhaEsperada = obterSenhaAprovacaoConfigurada();
-  if (!senhaEsperada) {
-    return { ok: false, error: "Senha de aprovacao nao configurada (APROVACAO_SENHA)." };
-  }
-  if (!s || s !== senhaEsperada) {
-    return { ok: false, error: "Senha inválida." };
-  }
-  var autorizacao = validarAprovadorAutorizado();
-  if (!autorizacao.ok) {
-    return { ok: false, error: autorizacao.error };
-  }
-
-  var ss = obterPlanilhaCorridaOuErro();
-  var main = obterAbaInscricoes(ss);
-  if (!main) {
-    return { ok: false, error: "Aba principal de inscrições não encontrada." };
-  }
-  garantirCabecalhosPlanilha(main);
-
-  var rowMain = encontrarLinhaPorProtocolo(main, p);
-  if (rowMain > 0) {
-    var statusMain = String(main.getRange(rowMain, COL_IX_STATUS + 1).getValue() || "").trim();
-    if (classificarStatusPagamento(statusMain) === "pago") {
-      return { ok: true, protocolo: p, statusAnterior: statusMain, statusNovo: statusMain, atualizado: false };
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var p = normalizarProtocoloLookup_(protocolo);
+    var s = String(senha || "").trim();
+    if (!p) {
+      return { ok: false, error: "Informe o protocolo na URL." };
     }
-    var stMainLower = String(statusMain || "").toLowerCase();
-    var novoStatusMain =
-      stMainLower.indexOf("aguardando pagamento online") !== -1
+    var senhaEsperada = obterSenhaAprovacaoConfigurada();
+    if (!senhaEsperada) {
+      return { ok: false, error: "Senha de aprovacao nao configurada (APROVACAO_SENHA)." };
+    }
+    if (!s || s !== senhaEsperada) {
+      return { ok: false, error: "Senha inválida." };
+    }
+    var autorizacao = validarAprovadorAutorizado();
+    if (!autorizacao.ok) {
+      return { ok: false, error: autorizacao.error };
+    }
+
+    var ss = obterPlanilhaCorridaOuErro();
+    var main = obterAbaInscricoes(ss);
+    if (!main) {
+      return { ok: false, error: "Aba principal de inscrições não encontrada." };
+    }
+    garantirCabecalhosPlanilha(main);
+    dedupePorProtocoloNaListaOficial_(main, p);
+
+    var rowMain = encontrarLinhaPorProtocolo(main, p);
+    if (rowMain > 0) {
+      var statusMain = String(main.getRange(rowMain, COL_IX_STATUS + 1).getValue() || "").trim();
+      if (classificarStatusPagamento(statusMain) === "pago") {
+        dedupePorProtocoloNaListaOficial_(main, p);
+        apagarProtocoloNasAbasPendentesExcetoLista_(ss, p);
+        sincronizarBackupSegurancaNoDrive();
+        return { ok: true, protocolo: p, statusAnterior: statusMain, statusNovo: statusMain, atualizado: false };
+      }
+      var stMainLower = String(statusMain || "").toLowerCase();
+      var novoStatusMain =
+        stMainLower.indexOf("aguardando pagamento online") !== -1
+          ? "Pago (Mercado Pago)"
+          : "Pago (presencial confirmado)";
+      main.getRange(rowMain, COL_IX_STATUS + 1).setValue(novoStatusMain);
+      aplicarCorFundoLinhaInscricao(main, rowMain, novoStatusMain);
+      var rowMainData = main.getRange(rowMain, 1, 1, CABECALHOS.length).getValues()[0];
+      enviarEmailPagamentoConfirmado(rowMainData);
+      sincronizarBackupSegurancaNoDrive();
+      return { ok: true, protocolo: p, statusAnterior: statusMain || "—", statusNovo: novoStatusMain, atualizado: true };
+    }
+
+    var achadoPres = encontrarProtocoloNasAbasPendentes(ss, p);
+    if (!achadoPres) {
+      return { ok: false, error: "Protocolo não encontrado.", protocolo: p };
+    }
+    var sheetPend = achadoPres.sheet;
+    var rowPend = achadoPres.rowIndex;
+
+    var rowData = sheetPend.getRange(rowPend, 1, 1, CABECALHOS.length).getValues()[0];
+    while (rowData.length < CABECALHOS.length) {
+      rowData.push("");
+    }
+    var protoLinha = normalizarProtocoloLookup_(rowData[COL_IX_PROTOCOLO]);
+    if (!protoLinha) {
+      return { ok: false, error: "Linha pendente sem protocolo.", protocolo: p };
+    }
+
+    var statusPend = String(rowData[COL_IX_STATUS] || "").trim();
+    var stPendLower = statusPend.toLowerCase();
+    var novoStatus =
+      stPendLower.indexOf("aguardando pagamento online") !== -1
         ? "Pago (Mercado Pago)"
         : "Pago (presencial confirmado)";
-    main.getRange(rowMain, COL_IX_STATUS + 1).setValue(novoStatusMain);
-    aplicarCorFundoLinhaInscricao(main, rowMain, novoStatusMain);
-    var rowMainData = main.getRange(rowMain, 1, 1, CABECALHOS.length).getValues()[0];
-    enviarEmailPagamentoConfirmado(rowMainData);
+    rowData[COL_IX_STATUS] = novoStatus;
+    rowData[COL_IX_LINK_APROVACAO] = "";
+
+    /** Segunda checagem sob lock: evita 2ª linha na lista se o link foi aberto duas vezes ou houve GET duplo. */
+    if (encontrarLinhaPorProtocolo(main, protoLinha) > 0) {
+      dedupePorProtocoloNaListaOficial_(main, protoLinha);
+      sheetPend.deleteRow(rowPend);
+      apagarProtocoloNasAbasPendentesExcetoLista_(ss, protoLinha);
+      sincronizarBackupSegurancaNoDrive();
+      return {
+        ok: true,
+        protocolo: protoLinha,
+        statusAnterior: statusPend || "—",
+        statusNovo: novoStatus,
+        atualizado: false,
+        mensagem: "Inscrição já estava na lista oficial; pendência(ões) removida(s).",
+      };
+    }
+
+    if (!jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])) {
+      /** moveTo = uma única operação na planilha (evita duplicar lista oficial entre appendRow e deleteRow). */
+      var destRow = main.getLastRow() + 1;
+      var srcRange = sheetPend.getRange(rowPend, 1, 1, CABECALHOS.length);
+      srcRange.setValues([rowData]);
+      srcRange.moveTo(main.getRange(destRow, 1, 1, CABECALHOS.length));
+      aplicarCorFundoLinhaInscricao(main, destRow, novoStatus);
+      enviarEmailPagamentoConfirmado(rowData);
+      /** Após mover entre abas, pode ficar linha em branco na fila — remove para não confundir próximas buscas. */
+      limparLinhaVaziaPorProtocoloNaAba_(sheetPend, rowPend);
+    } else {
+      sheetPend.deleteRow(rowPend);
+    }
+    dedupePorProtocoloNaListaOficial_(main, protoLinha);
+    apagarProtocoloNasAbasPendentesExcetoLista_(ss, protoLinha);
     sincronizarBackupSegurancaNoDrive();
-    return { ok: true, protocolo: p, statusAnterior: statusMain || "—", statusNovo: novoStatusMain, atualizado: true };
+    return { ok: true, protocolo: p, statusAnterior: statusPend || "—", statusNovo: novoStatus, atualizado: true };
+  } finally {
+    lock.releaseLock();
   }
-
-  var achadoPres = encontrarProtocoloNasAbasPendentes(ss, p);
-  if (!achadoPres) {
-    return { ok: false, error: "Protocolo não encontrado.", protocolo: p };
-  }
-  var sheetPend = achadoPres.sheet;
-  var rowPend = achadoPres.rowIndex;
-
-  var rowData = sheetPend.getRange(rowPend, 1, 1, CABECALHOS.length).getValues()[0];
-  while (rowData.length < CABECALHOS.length) {
-    rowData.push("");
-  }
-  var statusPend = String(rowData[COL_IX_STATUS] || "").trim();
-  var stPendLower = statusPend.toLowerCase();
-  var novoStatus =
-    stPendLower.indexOf("aguardando pagamento online") !== -1
-      ? "Pago (Mercado Pago)"
-      : "Pago (presencial confirmado)";
-  rowData[COL_IX_STATUS] = novoStatus;
-  rowData[COL_IX_LINK_APROVACAO] = "";
-
-  if (
-    encontrarLinhaPorProtocolo(main, rowData[COL_IX_PROTOCOLO]) < 0 &&
-    !jaTemCadastro(main, rowData[COL_IX_EMAIL], rowData[COL_IX_TELEFONE])
-  ) {
-    main.appendRow(rowData);
-    aplicarCorFundoLinhaInscricao(main, main.getLastRow(), novoStatus);
-    enviarEmailPagamentoConfirmado(rowData);
-  }
-  sheetPend.deleteRow(rowPend);
-  sincronizarBackupSegurancaNoDrive();
-  return { ok: true, protocolo: p, statusAnterior: statusPend || "—", statusNovo: novoStatus, atualizado: true };
 }
 
 function doPost(e) {
